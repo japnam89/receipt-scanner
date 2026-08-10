@@ -2,12 +2,18 @@
 require("dotenv").config();
 const express = require("express");
 const path = require("path");
+const fs = require("fs");
 const { stmt } = require("./src/db");
 const { authUrl, exchangeCode } = require("./src/drive");
 const { scan } = require("./src/scan");
 
 const app = express();
 app.use(express.json());
+
+// Base path this app is mounted under when behind a reverse proxy
+// (e.g. Traefik strips /receipt and sets BASE_PATH=/receipt).
+// Used only for building in-dashboard links.
+const BASE_PATH = process.env.BASE_PATH || "";
 
 // ---------- OAuth (one-time setup) ----------
 app.get("/auth", (req, res) => {
@@ -94,8 +100,12 @@ api.post("/scan", async (req, res) => {
 app.use("/api", api);
 
 // Tiny dashboard so you can trigger a scan + see results in a browser.
+// BASE_PATH is injected so links work behind a proxy prefix (e.g. /receipt).
 app.get("/", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "index.html"));
+  const html = fs
+    .readFileSync(path.join(__dirname, "public", "index.html"), "utf8")
+    .replace("/*BASE_PATH*/", JSON.stringify(BASE_PATH));
+  res.type("html").send(html);
 });
 
 const PORT = process.env.PORT || 4000;

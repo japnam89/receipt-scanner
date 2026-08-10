@@ -8,11 +8,18 @@ const { google } = require("googleapis");
 const TOKEN_PATH = path.join(__dirname, "..", "token.json");
 const SCOPES = ["https://www.googleapis.com/auth/drive.readonly"];
 
+function redirectUri() {
+  return (
+    process.env.OAUTH_REDIRECT_URI ||
+    `http://localhost:${process.env.PORT || 4000}/oauth2callback`
+  );
+}
+
 function loadCreds() {
   const id = process.env.GOOGLE_CLIENT_ID;
   const secret = process.env.GOOGLE_CLIENT_SECRET;
   if (!id || !secret || id === "___" || secret === "___") return null;
-  return { client_id: id, client_secret: secret, redirect_uris: ["http://localhost:4000/oauth2callback"] };
+  return { client_id: id, client_secret: secret, redirect_uris: [redirectUri()] };
 }
 
 function getClient() {
@@ -72,4 +79,4 @@ async function downloadFile(fileId) {
   return Buffer.from(res.data);
 }
 
-module.exports = { loadCreds, getClient, authUrl, exchangeCode, listReceiptFiles, downloadFile, TOKEN_PATH };
+module.exports = { loadCreds, getClient, authUrl, exchangeCode, listReceiptFiles, downloadFile, TOKEN_PATH, redirectUri };

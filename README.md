@@ -21,18 +21,29 @@ npm start                   # http://localhost:4000
 2. Put the client id/secret in `.env`.
 3. Open http://localhost:4000/auth, authorize, and the token is saved.
 
-### Scan + CRUD
+### Deploy behind japnam.tech/receipt (Traefik)
+The repo includes `docker-compose.yml` that mounts this app at
+**https://japnam.tech/receipt** via the existing Traefik (path stripping +
+letsencrypt TLS). It's a separate container from the portfolio/hibid stacks.
+
 ```bash
-curl -X POST http://localhost:4000/api/scan          # pull receipts from Drive
-curl http://localhost:4000/api/receipts              # list
-curl http://localhost:4000/api/receipts/1            # read
-curl -X PUT http://localhost:4000/api/receipts/1 \
-  -H 'Content-Type: application/json' \
-  -d '{"merchant":"Costco","total":42.10,"currency":"$"}'   # update
-curl -X DELETE http://localhost:4000/api/receipts/1  # delete
+cd receipt-scanner
+cp .env.example .env
+# fill GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET, and set:
+#   OAUTH_REDIRECT_URI=https://japnam.tech/receipt/oauth2callback
+#   BASE_PATH=/receipt
+docker compose up -d --build
 ```
 
-You can also just open http://localhost:4000 for a tiny dashboard.
+Then:
+1. Open **https://japnam.tech/receipt/auth** and authorize Google Drive.
+   (Add `https://japnam.tech/receipt/oauth2callback` as an authorized redirect
+   URI in the Google Cloud OAuth client.)
+2. `POST https://japnam.tech/receipt/api/scan` to pull + OCR receipts.
+3. Dashboard + CRUD at **https://japnam.tech/receipt**.
+
+> The Traefik rule is `Host(\`japnam.tech\`) && PathPrefix(\`/receipt\`)`, so it
+> coexists with the portfolio site (served at `/`) on the same host.
 
 ## How it works
 - `src/drive.js` — Google OAuth2 + Drive list/download (read-only scope).

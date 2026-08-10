@@ -1,0 +1,38 @@
+# receipt-scanner — Google Drive receipt scanner + OCR, served under
+# https://japnam.tech/receipt via the existing Traefik.
+#
+# Traefik runs with network_mode: host and provides TLS via letsencrypt, so no
+# TLS config is needed here. It strips the /receipt prefix and forwards the rest
+# to this container on port 4000.
+#
+# Deploy on the VPS (same host as Traefik + portfolio):
+#   docker compose up -d --build
+#
+# Then:
+#   1. Set OAUTH_REDIRECT_URI=https://japnam.tech/receipt/oauth2callback in .env
+#   2. Open https://japnam.tech/receipt/auth to connect Google Drive
+#   3. POST https://japnam.tech/receipt/api/scan to pull + OCR receipts
+
+services:
+  receipt-scanner:
+    build: .
+    container_name: receipt-scanner
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - PORT=4000
+      - BASE_PATH=/receipt
+      - OAUTH_REDIRECT_URI=https://japnam.tech/receipt/oauth2callback
+      # GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_DRIVE_FOLDER_ID come
+      # from the .env file mounted below (gitignored).
+    env_file:
+      - .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.receipt.rule=Host(`japnam.tech`) && PathPrefix(`/receipt`)"
+      - "traefik.http.routers.receipt.entrypoints=websecure"
+      - "traefik.http.routers.receipt.tls=true"
+      - "traefik.http.routers.receipt.tls.certresolver=letsencrypt"
+      - "traefik.http.middlewares.receipt-strip.stripprefix.prefixes=/receipt"
+      - "traefik.http.routers.receipt.middlewares=receipt-strip"
+      - "traefik.http.services.receipt.loadbalancer.server.port=4000"
