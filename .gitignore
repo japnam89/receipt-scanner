@@ -1,0 +1,7 @@
+node_modules/
+.env
+token.json
+receipts.db
+receipts.db-wal
+receipts.db-shm
+.receipts/

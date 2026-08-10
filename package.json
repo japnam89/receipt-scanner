@@ -1,0 +1,23 @@
+{
+  "name": "receipt-scanner",
+  "version": "1.0.0",
+  "description": "REST CRUD receipt scanner that pulls receipts from Google Drive, OCRs them, and stores structured data.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "auth": "node scripts/auth.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "googleapis": "^174.0.1",
+    "pdf-parse": "^2.4.5",
+    "tesseract.js": "^7.0.0"
+  }
+}

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Receipt Scanner</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    .wrap { max-width: 880px; margin: 0 auto; padding: 24px; }
+    h1 { font-size: 22px; }
+    button { background: #2563eb; color: #fff; border: 0; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+    button.ghost { background: #334155; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid #1e293b; }
+    th { color: #94a3b8; font-weight: 600; }
+    a { color: #60a5fa; }
+    .hint { color: #94a3b8; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🧾 Receipt Scanner</h1>
+    <p class="hint">Connect Google Drive once via <a href="/auth">/auth</a>, then scan. CRUD works without Drive too.</p>
+    <div class="row">
+      <button id="scan">Scan Google Drive</button>
+      <button id="refresh" class="ghost">Refresh list</button>
+    </div>
+    <div id="status" class="hint"></div>
+    <table>
+      <thead><tr><th>ID</th><th>Name</th><th>Merchant</th><th>Total</th><th>Date</th><th>Link</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <script>
+    const rows = document.getElementById("rows");
+    const status = document.getElementById("status");
+    async function load() {
+      const r = await fetch("/api/receipts");
+      const data = await r.json();
+      rows.innerHTML = data.map(x => `<tr>
+        <td>${x.id}</td><td>${x.name}</td><td>${x.merchant || ""}</td>
+        <td>${x.currency || ""}${x.total ?? ""}</td><td>${x.receipt_date || ""}</td>
+        <td>${x.web_view_link ? `<a href="${x.web_view_link}" target="_blank">Drive</a>` : ""}</td>
+      </tr>`).join("");
+    }
+    document.getElementById("refresh").onclick = load;
+    document.getElementById("scan").onclick = async () => {
+      status.textContent = "Scanning…";
+      const r = await fetch("/api/scan", { method: "POST" });
+      const j = await r.json();
+      status.textContent = r.ok ? `Scanned ${j.scanned} file(s).` : `Error: ${j.error}`;
+      load();
+    };
+    load();
+  </script>
+</body>
+</html>
