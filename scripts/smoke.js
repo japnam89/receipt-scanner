@@ -49,6 +49,8 @@ const del = (p) => new Promise((res) => {
     check("GET /api/receipts -> 200", (await get("/api/receipts")).code === 200);
     check("PUT /api/receipts/:id -> 200", (await put(`/api/receipts/${id}`, { category: "t" })).code === 200);
     check("DELETE /api/receipts/:id -> 204", (await del(`/api/receipts/${id}`)).code === 204);
+    const h = await get("/healthz");
+    check("GET /healthz -> 200 {ok:true}", h.code === 200 && /"ok":true/.test(h.body), "code=" + h.code);
     const sc = await post("/api/scan", {});
     check("POST /api/scan graceful without creds", sc.code === 500 && /Not authenticated/.test(sc.body), "code=" + sc.code);
   } finally {

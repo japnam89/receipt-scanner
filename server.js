@@ -15,6 +15,13 @@ app.use(express.json());
 // Used only for building in-dashboard links.
 const BASE_PATH = process.env.BASE_PATH || "";
 
+// Lightweight liveness probe — no DB/Google dependency, so the container
+// reports healthy as soon as it's listening (helps `docker ps` + Traefik
+// detect a dead scanner instead of silently falling through to the portfolio).
+app.get("/healthz", (_req, res) => {
+  res.json({ ok: true, ts: Date.now() });
+});
+
 // ---------- OAuth (one-time setup) ----------
 app.get("/auth", (req, res) => {
   try {

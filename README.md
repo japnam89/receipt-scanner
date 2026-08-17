@@ -59,3 +59,19 @@ Then:
 - OCR is heuristic; for production accuracy swap `src/ocr.js` for Google Vision
   or an LLM with vision.
 - CRUD works even before Drive is connected (you can POST receipts manually).
+
+## Troubleshooting: `https://japnam.tech/receipt` returns the portfolio's 404
+This app is a **separate container** from the portfolio — deploying/redeploying
+the portfolio does NOT touch it. If `/receipt` shows Next.js's 404 (look for
+`x-nextjs-prerender` in the response headers), Traefik isn't routing to this
+container, which means it's not running. On the VPS:
+
+```bash
+cd /opt/data/receipt-scanner
+docker compose ps            # should show "receipt-scanner" Up (healthy)
+docker compose up -d --build # (re)start it if missing/down
+curl -fsS https://japnam.tech/receipt/healthz   # expect {"ok":true,...}
+```
+
+Also confirm `cp .env.example .env` exists — `docker-compose.yml` mounts `.env`
+via `env_file`, so a missing `.env` will make the deploy fail.
