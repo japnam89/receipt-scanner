@@ -26,6 +26,10 @@ The repo includes `docker-compose.yml` that mounts this app at
 **https://japnam.tech/receipt** via the existing Traefik (path stripping +
 letsencrypt TLS). It's a separate container from the portfolio/hibid stacks.
 
+See **[DEPLOY.md](./DEPLOY.md)** for the full deploy runbook — including the
+GitHub Actions automatic deploy (SSH into the VPS after a green CI run) and a
+manual `docker compose` path.
+
 ```bash
 cd receipt-scanner
 cp .env.example .env

@@ -1,0 +1,71 @@
+name: Deploy to VPS
+
+# Runs only after the "CI" workflow succeeds on main (so we never ship a
+# broken build). CI is defined in .github/workflows/ci.yml.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          # Don't surface secrets or stray output.
+          debug: false
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            REPO_URL="https://github.com/japnam89/receipt-scanner.git"
+            APP_DIR="/opt/data/receipt-scanner"
+
+            # 1. Make sure the repo is present and up to date.
+            #    Use a read-only deploy token only for the initial clone so we
+            #    don't depend on the VPS having GitHub SSH keys configured.
+            if [ ! -d "$APP_DIR/.git" ]; then
+              echo ":: cloning receipt-scanner (first run)"
+              mkdir -p "$APP_DIR"
+              # token is optional for a PUBLIC repo; required for a PRIVATE one
+              if [ -n "${{ secrets.GH_PULL_TOKEN }}" ]; then
+                git clone "https://x-access-token:${{ secrets.GH_PULL_TOKEN }}@github.com/japnam89/receipt-scanner.git" "$APP_DIR"
+              else
+                git clone "$REPO_URL" "$APP_DIR"
+              fi
+            fi
+            cd "$APP_DIR"
+            git fetch --all --prune
+            git reset --hard "origin/main"
+
+            # 2. .env must already exist on the VPS (gitignored, holds OAuth
+            #    secrets). Fail fast with a clear message if it's missing.
+            if [ ! -f .env ]; then
+              echo ":: ERROR: .env missing on VPS — copy .env.example and fill GOOGLE_CLIENT_ID/SECRET"
+              exit 1
+            fi
+
+            # 3. Rebuild and (re)start the container.
+            docker compose up -d --build
+
+            # 4. Wait for the health probe, retrying (cold build + Tesseract
+            #    download can take a while on first boot).
+            echo ":: waiting for /healthz"
+            for i in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:4000/healthz >/dev/null 2>&1; then
+                echo ":: healthy after ${i} tries"
+                break
+              fi
+              sleep 5
+            done
+
+            # 5. Final verification (non-zero exit fails the job).
+            curl -fsS http://127.0.0.1:4000/healthz | sed 's/^/healthz: /'
+            docker compose ps
