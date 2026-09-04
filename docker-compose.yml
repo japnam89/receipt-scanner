@@ -35,6 +35,10 @@ services:
       - .env
     labels:
       - "traefik.enable=true"
+      # Higher priority than the portfolio's catch-all (Host(japnam.tech)).
+      # Default priority is 0; portfolio router also has 0, so the more specific
+      # PathPrefix rule would usually win — but set it explicitly to be safe.
+      - "traefik.http.routers.receipt.priority=10"
       - "traefik.http.routers.receipt.rule=Host(`japnam.tech`) && PathPrefix(`/receipt`)"
       - "traefik.http.routers.receipt.entrypoints=websecure"
       - "traefik.http.routers.receipt.tls=true"
