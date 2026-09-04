@@ -15,6 +15,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # better-sqlite3 is a native addon — ensure the runner has build tools so
+      # node-gyp can compile it BEFORE npm install runs.
+      - run: sudo apt-get update && sudo apt-get install -y build-essential python3
       - run: npm install
       - name: Smoke test (boot + REST CRUD + graceful scan)
         run: npm test
