@@ -41,6 +41,8 @@ services:
       - "traefik.http.routers.receipt.priority=10"
       - "traefik.http.routers.receipt.rule=Host(`japnam.tech`) && PathPrefix(`/receipt`)"
       - "traefik.http.routers.receipt.entrypoints=websecure"
+      - "traefik.http.routers.receipt.tls=true"
+      - "traefik.http.routers.receipt.tls.certresolver=letsencrypt"
       - "traefik.http.middlewares.receipt-stripprefix.stripprefix.prefixes=/receipt"
       - "traefik.http.routers.receipt.middlewares=receipt-stripprefix"
       - "traefik.http.services.receipt.loadbalancer.server.port=4000"
