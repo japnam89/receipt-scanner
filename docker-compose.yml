@@ -18,12 +18,7 @@ services:
     build: .
     container_name: receipt-scanner
     restart: unless-stopped
-    expose:
-      - "4000"
-    ports:
-      - "4000:4000"
-    networks:
-      - receipt-net
+    network_mode: host
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:4000/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
       interval: 30s
@@ -50,6 +45,6 @@ services:
       - "traefik.http.routers.receipt.middlewares=receipt-stripprefix"
       - "traefik.http.services.receipt.loadbalancer.server.port=4000"
 
-networks:
-  receipt-net:
-    driver: bridge
+# NOTE: The container uses network_mode: host so Traefik (also on host network)
+# can discover it via the Docker socket and route to it. Do NOT add a bridge
+# network here — Traefik on host network cannot be connected to bridge networks.
