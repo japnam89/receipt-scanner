@@ -45,10 +45,9 @@ services:
       - "traefik.http.routers.receipt.tls.certresolver=letsencrypt"
       - "traefik.http.middlewares.receipt-stripprefix.stripprefix.prefixes=/receipt"
       - "traefik.http.routers.receipt.middlewares=receipt-stripprefix"
-      - "traefik.http.services.receipt.loadbalancer.server.port=4000"
-      - "traefik.http.services.receipt.loadbalancer.server.address=127.0.0.1"
+      - "traefik.http.services.receipt.loadbalancer.servers[0].url=http://127.0.0.1:4000"
 
 # NOTE: The container uses network_mode: host so Traefik (also on host network)
 # can discover it via the Docker socket and route to it. The explicit
-# server.address=127.0.0.1 label is needed because a host-networked container
-# has no Docker network IP for Traefik to auto-discover.
+# servers[0].url=http://127.0.0.1:4000 label is needed because a host-networked
+# container has no Docker network IP for Traefik to auto-discover.
