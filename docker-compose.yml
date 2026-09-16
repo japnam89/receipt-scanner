@@ -1,53 +1,39 @@
-# receipt-scanner — Google Drive receipt scanner + OCR, served under
-# https://japnam.tech/receipt via the existing Traefik.
-#
-# Traefik runs with network_mode: host and provides TLS via letsencrypt, so no
-# TLS config is needed here. It strips the /receipt prefix and forwards the rest
-# to this container on port 4000.
-#
-# Deploy on the VPS (same host as Traefik + portfolio):
-#   docker compose up -d --build
-#
-# Then:
-#   1. Set OAUTH_REDIRECT_URI=https://japnam.tech/receipt/oauth2callback in .env
-#   2. Open https://japnam.tech/receipt/auth to connect Google Drive
-#   3. POST https://japnam.tech/receipt/api/scan to pull + OCR receipts
+# receipt-scanner Docker Compose with Traefik labels
+# 
+# Traefik runs on network_mode: host and CANNOT join bridge networks
+# ("container sharing network namespace with another container or host 
+# cannot be connected to any other network").
+# 
+# Solution: receipt-scanner uses the default bridge network with port
+# mapping (4000:4000). Traefik (host network) reaches it via 127.0.0.1:4000
+# — no network connect needed. Traefik's Docker provider discovers the
+# container via Docker API, sees the published port, and creates the
+# backend service automatically.
+version: "3.8"
 
 services:
   receipt-scanner:
     build: .
     container_name: receipt-scanner
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "4000:4000"
+    env_file: .env
+    environment:
+      - OAUTH_REDIRECT_URI=https://japnam.tech/receipt/oauth2callback
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:4000/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
-      interval: 30s
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:4000/healthz"]
+      interval: 15s
       timeout: 5s
       retries: 3
       start_period: 10s
-    environment:
-      - PORT=4000
-      - BASE_PATH=/receipt
-      - OAUTH_REDIRECT_URI=https://japnam.tech/receipt/oauth2callback
-      # GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_DRIVE_FOLDER_ID come
-      # from the .env file mounted below (gitignored).
-    env_file:
-      - .env
     labels:
       - "traefik.enable=true"
-      # Higher priority than the portfolio's catch-all (Host(japnam.tech)).
-      # Default priority is 0; portfolio router also has 0, so the more specific
-      # PathPrefix rule would usually win — but set it explicitly to be safe.
-      - "traefik.http.routers.receipt.priority=10"
       - "traefik.http.routers.receipt.rule=Host(`japnam.tech`) && PathPrefix(`/receipt`)"
       - "traefik.http.routers.receipt.entrypoints=websecure"
+      - "traefik.http.routers.receipt.priority=10"
       - "traefik.http.routers.receipt.tls=true"
       - "traefik.http.routers.receipt.tls.certresolver=letsencrypt"
       - "traefik.http.middlewares.receipt-stripprefix.stripprefix.prefixes=/receipt"
       - "traefik.http.routers.receipt.middlewares=receipt-stripprefix"
-      - "traefik.http.services.receipt.loadbalancer.servers[0].url=http://127.0.0.1:4000"
-
-# NOTE: The container uses network_mode: host so Traefik (also on host network)
-# can discover it via the Docker socket and route to it. The explicit
-# servers[0].url=http://127.0.0.1:4000 label is needed because a host-networked
-# container has no Docker network IP for Traefik to auto-discover.
+      - "traefik.http.services.receipt.loadbalancer.server.port=4000"
