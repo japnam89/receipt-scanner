@@ -10,10 +10,28 @@ const { scan } = require("./src/scan");
 const app = express();
 app.use(express.json());
 
-// Base path this app is mounted under when behind a reverse proxy
-// (e.g. Traefik strips /receipt and sets BASE_PATH=/receipt).
-// Used only for building in-dashboard links.
+// Base path this app is mounted under when behind a reverse proxy.
+// Leave blank for local development; only set /receipt when the app is routed
+// behind a proxy prefix. The browser page also derives its base from the actual
+// URL to avoid broken local root requests.
 const BASE_PATH = process.env.BASE_PATH || "";
+
+function hasSavedToken() {
+  const tokenPath = path.join(__dirname, "token.json");
+  if (!fs.existsSync(tokenPath)) return false;
+  try {
+    const token = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
+    return Boolean(token && token.access_token);
+  } catch {
+    return false;
+  }
+}
+
+function noCache(res) {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+}
 
 // Lightweight liveness probe — no DB/Google dependency, so the container
 // reports healthy as soon as it's listening (helps `docker ps` + Traefik
@@ -23,19 +41,25 @@ app.get("/healthz", (_req, res) => {
 });
 
 // ---------- OAuth (one-time setup) ----------
-app.get("/auth", (req, res) => {
+app.get(["/auth", "/receipt/auth"], (req, res) => {
   try {
+    noCache(res);
+    if (hasSavedToken()) return res.redirect("/");
     res.redirect(authUrl());
   } catch (e) {
+    noCache(res);
     res.status(500).send(`<h1>Auth not configured</h1><p>${e.message}</p>`);
   }
 });
 
-app.get("/oauth2callback", async (req, res) => {
+app.get(["/oauth2callback", "/receipt/oauth2callback"], async (req, res) => {
   try {
+    noCache(res);
     await exchangeCode(req.query.code);
-    res.send("<h1>✅ Google Drive connected.</h1><p>You can close this tab and run POST /api/scan.</p>");
+    const redirectTarget = BASE_PATH ? `${BASE_PATH}/?afterAuth=1` : "/?afterAuth=1";
+    return res.redirect(redirectTarget);
   } catch (e) {
+    noCache(res);
     res.status(500).send(`<h1>Auth failed</h1><p>${e.message}</p>`);
   }
 });
@@ -108,10 +132,17 @@ app.use("/api", api);
 
 // Tiny dashboard so you can trigger a scan + see results in a browser.
 // BASE_PATH is injected so links work behind a proxy prefix (e.g. /receipt).
-app.get("/", (req, res) => {
+app.get(["/", "/receipt", "/receipt/"], (req, res) => {
+  noCache(res);
+
+  if (!hasSavedToken()) return res.redirect("/auth");
+
+  const injectedBase = req.originalUrl.startsWith("/receipt") ? BASE_PATH || "/receipt" : "";
+  const shouldAutoScan = req.query.afterAuth === "1";
   const html = fs
     .readFileSync(path.join(__dirname, "public", "index.html"), "utf8")
-    .replace("/*BASE_PATH*/", JSON.stringify(BASE_PATH));
+    .replace("/*BASE_PATH*/", JSON.stringify(injectedBase))
+    .replace("/*AUTO_SCAN*/", String(shouldAutoScan));
   res.type("html").send(html);
 });
 

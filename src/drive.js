@@ -59,7 +59,7 @@ async function listReceiptFiles() {
   const q = [
     "trashed = false",
     "(mimeType = 'application/pdf' or mimeType contains 'image/')",
-    "name contains 'receipt' or name contains 'invoice' or name contains 'bill' or name contains 'expense'",
+    "(name contains 'receipt' or name contains 'invoice' or name contains 'bill' or name contains 'expense' or name contains 'order' or name contains 'statement' or name contains 'payment' or name contains 'purchase' or name contains 'tax' or name contains 'charge' or name contains 'statement')",
     folder ? `'${folder}' in parents` : null,
   ].filter(Boolean).join(" and ");
 

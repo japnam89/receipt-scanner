@@ -16,44 +16,177 @@
     th { color: #94a3b8; font-weight: 600; }
     a { color: #60a5fa; }
     .hint { color: #94a3b8; font-size: 13px; }
+    .empty-state { color: #cbd5e1; font-size: 14px; padding: 18px 8px; }
+    .spinner { display: inline-block; width: 12px; height: 12px; border: 2px solid rgba(148,163,184,0.45); border-top-color: #60a5fa; border-radius: 50%; vertical-align: middle; animation: spin 0.8s linear infinite; margin-right: 8px; }
+    .actions { display: flex; gap: 6px; }
+    .mini-btn { border: 0; border-radius: 6px; padding: 6px 8px; font-size: 12px; cursor: pointer; }
+    .mini-btn.edit { background: #334155; }
+    .mini-btn.delete { background: #7f1d1d; }
+    @keyframes spin { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>🧾 Receipt Scanner</h1>
-    <p class="hint">Connect Google Drive once via <a href="/auth">/auth</a>, then scan. CRUD works without Drive too.</p>
+    <p class="hint">Connect Google Drive once via <a id="auth-link" href="/auth">/auth</a>, then scan. CRUD works without Drive too.</p>
     <div class="row">
       <button id="scan">Scan Google Drive</button>
       <button id="refresh" class="ghost">Refresh list</button>
     </div>
-    <div id="status" class="hint"></div>
+    <div id="status" class="hint">Loading receipts…</div>
     <table>
-      <thead><tr><th>ID</th><th>Name</th><th>Merchant</th><th>Total</th><th>Date</th><th>Link</th></tr></thead>
+      <thead><tr><th>ID</th><th>Name</th><th>Merchant</th><th>Total</th><th>Date</th><th>Link</th><th>Actions</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
   </div>
   <script>
-    const BASE = /*BASE_PATH*/ "/";
+    const injectedBase = /*BASE_PATH*/ || "";
+    const AUTO_SCAN = /*AUTO_SCAN*/;
+    const currentPath = window.location.pathname || "/";
+    const resolvedBase = currentPath.startsWith("/receipt") ? "/receipt" : "";
+    const BASE_PREFIX = resolvedBase || (injectedBase && injectedBase !== "/" ? injectedBase.replace(/\/+$/, "") : "");
     const rows = document.getElementById("rows");
     const status = document.getElementById("status");
-    async function load() {
-      const r = await fetch(BASE + "api/receipts");
-      const data = await r.json();
-      rows.innerHTML = data.map(x => `<tr>
-        <td>${x.id}</td><td>${x.name}</td><td>${x.merchant || ""}</td>
-        <td>${x.currency || ""}${x.total ?? ""}</td><td>${x.receipt_date || ""}</td>
-        <td>${x.web_view_link ? `<a href="${x.web_view_link}" target="_blank">Drive</a>` : ""}</td>
-      </tr>`).join("");
+    const authLink = document.getElementById("auth-link");
+    authLink.href = BASE_PREFIX ? BASE_PREFIX + "/auth" : "/auth";
+
+    function stringifyMerchant(value) {
+      const raw = String(value || "").trim();
+      if (!raw) return "Unknown merchant";
+      let cleaned = raw
+        .replace(/\.[a-z0-9]+$/i, "")
+        .replace(/[_-]+/g, " ")
+        .replace(/\s*\([^)]*\)/g, " ")
+        .replace(/\b(?:email\s*receipt|test\s*receipt|invoice|order|receipt|confirmation|bill|payment|download|file)\b/gi, " ")
+        .replace(/(?<![A-Za-z])[0-9]+(?![A-Za-z])/g, " ")
+        .replace(/[^A-Za-z0-9&\s.-]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      if (!cleaned || /^unknown merchant$/i.test(cleaned)) return "Unknown merchant";
+      if (/^(?:order|invoice|receipt|email|confirmation|bill|payment|test)/i.test(cleaned)) return "Unknown merchant";
+      if (/^[\d\s]+$/.test(cleaned)) return "Unknown merchant";
+      return cleaned;
     }
+
+    function setLoading(message) {
+      status.innerHTML = `<span class="spinner"></span>${message}`;
+    }
+
+    function renderEmptyState() {
+      rows.innerHTML = `<tr><td colspan="7" class="empty-state">No receipts yet. Scan Google Drive or add one manually.</td></tr>`;
+    }
+
+    function apiUrl(path) {
+      return BASE_PREFIX ? `${BASE_PREFIX}/${path.replace(/^\//, "")}` : `/${path.replace(/^\//, "")}`;
+    }
+
+    async function editReceipt(id) {
+      const current = rows.querySelector(`[data-id="${id}"]`)?.dataset?.merchant || "";
+      const nextValue = window.prompt("Edit merchant name", current || "");
+      if (nextValue === null) return;
+      const merchant = nextValue.trim();
+      if (!merchant) return;
+
+      const r = await fetch(apiUrl(`api/receipts/${id}`), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ merchant })
+      });
+
+      if (!r.ok) {
+        status.textContent = "Could not update receipt.";
+        return;
+      }
+
+      await load();
+    }
+
+    async function deleteReceipt(id) {
+      const confirmed = window.confirm("Delete this receipt?");
+      if (!confirmed) return;
+
+      const r = await fetch(apiUrl(`api/receipts/${id}`), { method: "DELETE" });
+      if (!r.ok) {
+        status.textContent = "Could not delete receipt.";
+        return;
+      }
+
+      await load();
+    }
+
+    async function load() {
+      setLoading("Loading receipts…");
+      try {
+        const r = await fetch(apiUrl("api/receipts"));
+        const payload = await r.json();
+        const data = Array.isArray(payload) ? payload : Array.isArray(payload?.value) ? payload.value : [];
+
+        if (!Array.isArray(data) || data.length === 0) {
+          renderEmptyState();
+          status.textContent = "No receipts found.";
+          return;
+        }
+
+        rows.innerHTML = data.map(x => `<tr>
+          <td>${x.id}</td><td>${x.name}</td><td>${stringifyMerchant(x.merchant || x.name)}</td>
+          <td>${(x.currency || "") + (x.total ?? "")}</td><td>${x.receipt_date || ""}</td>
+          <td>${x.web_view_link ? `<a href="${x.web_view_link}" target="_blank" rel="noreferrer">Drive</a>` : ""}</td>
+          <td class="actions">
+            <button class="mini-btn edit" data-action="edit" data-id="${x.id}" data-merchant="${String(x.merchant || x.name || "").replace(/"/g, '&quot;')}">Edit</button>
+            <button class="mini-btn delete" data-action="delete" data-id="${x.id}">Delete</button>
+          </td>
+        </tr>`).join("");
+        status.textContent = `${data.length} receipt(s) loaded.`;
+      } catch (e) {
+        rows.innerHTML = "";
+        renderEmptyState();
+        status.textContent = "Unable to load receipts.";
+      }
+    }
+
+    async function scanNow() {
+      setLoading("Scanning…");
+      try {
+        const r = await fetch(apiUrl("api/scan"), { method: "POST" });
+        const j = await r.json();
+        status.textContent = r.ok ? `Scanned ${j.scanned} file(s).` : `Error: ${j.error}`;
+        await load();
+      } catch (e) {
+        status.textContent = "Scan failed.";
+      }
+    }
+
+    async function maybeAutoScanAfterAuth() {
+      const params = new URLSearchParams(window.location.search);
+      if (!AUTO_SCAN && params.get("afterAuth") !== "1") return false;
+
+      params.delete("afterAuth");
+      const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}${window.location.hash || ""}`;
+      history.replaceState({}, "", nextUrl);
+      await scanNow();
+      return true;
+    }
+
+    document.addEventListener("click", async (event) => {
+      const target = event.target.closest("button[data-action]");
+      if (!target) return;
+      const id = Number(target.dataset.id);
+      if (!id) return;
+      if (target.dataset.action === "edit") {
+        await editReceipt(id);
+      }
+      if (target.dataset.action === "delete") {
+        await deleteReceipt(id);
+      }
+    });
+
     document.getElementById("refresh").onclick = load;
-    document.getElementById("scan").onclick = async () => {
-      status.textContent = "Scanning…";
-      const r = await fetch(BASE + "api/scan", { method: "POST" });
-      const j = await r.json();
-      status.textContent = r.ok ? `Scanned ${j.scanned} file(s).` : `Error: ${j.error}`;
-      load();
-    };
-    load();
+    document.getElementById("scan").onclick = scanNow;
+
+    maybeAutoScanAfterAuth().then((didAutoScan) => {
+      if (!didAutoScan) load();
+    });
   </script>
 </body>
 </html>
