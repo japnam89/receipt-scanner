@@ -10,10 +10,14 @@
     h1 { font-size: 22px; }
     button { background: #2563eb; color: #fff; border: 0; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; }
     button.ghost { background: #334155; }
+    .button-link { display: inline-flex; align-items: center; min-height: 40px; padding: 0 14px; border-radius: 8px; background: #2563eb; color: #fff; text-decoration: none; font-size: 14px; }
     .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
-    table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px; }
+    .currency-control { display: flex; align-items: center; gap: 8px; color: #cbd5e1; font-size: 14px; }
+    select { min-height: 40px; padding: 8px 10px; border: 1px solid #475569; border-radius: 6px; background: #1e293b; color: #e2e8f0; font-size: 14px; }
+    .table-wrap { width: 100%; overflow-x: auto; margin-top: 20px; }
+    table { width: 100%; min-width: 720px; border-collapse: collapse; font-size: 13px; }
     th, td { text-align: left; padding: 8px; border-bottom: 1px solid #1e293b; }
-    th { color: #94a3b8; font-weight: 600; }
+    th { padding-bottom: 16px; color: #94a3b8; font-weight: 600; }
     a { color: #60a5fa; }
     .hint { color: #94a3b8; font-size: 13px; }
     .empty-state { color: #cbd5e1; font-size: 14px; padding: 18px 8px; }
@@ -22,7 +26,22 @@
     .mini-btn { border: 0; border-radius: 6px; padding: 6px 8px; font-size: 12px; cursor: pointer; }
     .mini-btn.edit { background: #334155; }
     .mini-btn.delete { background: #7f1d1d; }
+    .pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+    .pagination[hidden] { display: none; }
+    .pagination-controls { display: flex; align-items: center; gap: 10px; }
+    .pagination button:disabled { opacity: .45; cursor: not-allowed; }
     @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 640px) {
+      .wrap { padding: 16px; }
+      .table-wrap { overflow: visible; }
+      table, tbody { display: block; width: 100%; min-width: 0; }
+      thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+      tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2px 12px; margin: 12px 0; padding: 10px; border: 1px solid #1e293b; background: #111c33; }
+      tbody td { display: flex; justify-content: space-between; gap: 10px; min-width: 0; padding: 6px 2px; border: 0; text-align: right; overflow-wrap: anywhere; }
+      tbody td::before { content: attr(data-label); color: #94a3b8; font-weight: 600; text-align: left; }
+      tbody td[data-label="Name"], tbody td[data-label="Actions"] { grid-column: 1 / -1; }
+      .pagination { align-items: flex-start; flex-direction: column; }
+    }
   </style>
 </head>
 <body>
@@ -31,13 +50,33 @@
     <p class="hint">Connect Google Drive once via <a id="auth-link" href="/auth">/auth</a>, then scan. CRUD works without Drive too.</p>
     <div class="row">
       <button id="scan">Scan Google Drive</button>
+      <a id="upload-link" class="button-link" href="/upload">Upload PDFs</a>
       <button id="refresh" class="ghost">Refresh list</button>
+      <button id="logout" class="ghost">Log out</button>
+      <label class="currency-control" for="display-currency">Display currency
+        <select id="display-currency">
+          <option value="USD">USD</option>
+          <option value="CAD">CAD</option>
+          <option value="INR">INR</option>
+        </select>
+      </label>
     </div>
+    <div id="model-info" class="hint" role="status">Loading extraction model…</div>
     <div id="status" class="hint">Loading receipts…</div>
-    <table>
-      <thead><tr><th>ID</th><th>Name</th><th>Merchant</th><th>Total</th><th>Date</th><th>Link</th><th>Actions</th></tr></thead>
-      <tbody id="rows"></tbody>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Type</th><th>Name</th><th>Merchant</th><th>Total</th><th>Date</th><th>Link</th><th>Actions</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <nav id="pagination" class="pagination" aria-label="Receipt pages" hidden>
+      <span id="pagination-summary" class="hint"></span>
+      <div class="pagination-controls">
+        <button id="previous-page" class="ghost" type="button">Previous</button>
+        <span id="page-indicator" class="hint" aria-live="polite"></span>
+        <button id="next-page" class="ghost" type="button">Next</button>
+      </div>
+    </nav>
   </div>
   <script>
     const injectedBase = /*BASE_PATH*/ || "";
@@ -47,7 +86,21 @@
     const BASE_PREFIX = resolvedBase || (injectedBase && injectedBase !== "/" ? injectedBase.replace(/\/+$/, "") : "");
     const rows = document.getElementById("rows");
     const status = document.getElementById("status");
+    const modelInfo = document.getElementById("model-info");
+    const pagination = document.getElementById("pagination");
+    const paginationSummary = document.getElementById("pagination-summary");
+    const pageIndicator = document.getElementById("page-indicator");
     const authLink = document.getElementById("auth-link");
+    const uploadLink = document.getElementById("upload-link");
+    const currencySelect = document.getElementById("display-currency");
+    const supportedCurrencies = ["USD", "CAD", "INR"];
+    let displayCurrency = localStorage.getItem("receiptDisplayCurrency");
+    if (!supportedCurrencies.includes(displayCurrency)) displayCurrency = "CAD";
+    currencySelect.value = displayCurrency;
+    let exchangeRates;
+    const PAGE_SIZE = 10;
+    let allReceipts = [];
+    let currentPage = 1;
     authLink.href = BASE_PREFIX ? BASE_PREFIX + "/auth" : "/auth";
 
     function stringifyMerchant(value) {
@@ -74,11 +127,83 @@
     }
 
     function renderEmptyState() {
-      rows.innerHTML = `<tr><td colspan="7" class="empty-state">No receipts yet. Scan Google Drive or add one manually.</td></tr>`;
+      allReceipts = [];
+      currentPage = 1;
+      pagination.hidden = true;
+      rows.innerHTML = `<tr><td colspan="8" class="empty-state">No receipts yet. Scan Google Drive or add one manually.</td></tr>`;
+    }
+
+    function renderPage() {
+      const totalPages = Math.max(1, Math.ceil(allReceipts.length / PAGE_SIZE));
+      currentPage = Math.min(currentPage, totalPages);
+      const start = (currentPage - 1) * PAGE_SIZE;
+      const pageReceipts = allReceipts.slice(start, start + PAGE_SIZE);
+      rows.innerHTML = pageReceipts.map((x, pageIndex) => `<tr>
+        <td data-label="ID">${start + pageIndex + 1}</td><td data-label="Type">${x.document_type || "Other"}</td><td data-label="Name">${x.name}</td><td data-label="Merchant">${stringifyMerchant(x.merchant || x.name)}</td>
+        <td data-label="Total">${formatReceiptTotal(x)}</td><td data-label="Date">${x.receipt_date || ""}</td>
+        <td data-label="Link">${x.web_view_link ? `<a href="${x.web_view_link}" target="_blank" rel="noreferrer">Drive</a>` : ""}</td>
+        <td data-label="Actions" class="actions">
+          <button class="mini-btn edit" data-action="edit" data-id="${x.id}" data-merchant="${String(x.merchant || x.name || "").replace(/"/g, '&quot;')}">Edit</button>
+          <button class="mini-btn delete" data-action="delete" data-id="${x.id}">Delete</button>
+        </td>
+      </tr>`).join("");
+      pagination.hidden = allReceipts.length <= PAGE_SIZE;
+      paginationSummary.textContent = `Showing ${start + 1}-${Math.min(start + PAGE_SIZE, allReceipts.length)} of ${allReceipts.length}`;
+      pageIndicator.textContent = `Page ${currentPage} of ${totalPages}`;
+      document.getElementById("previous-page").disabled = currentPage === 1;
+      document.getElementById("next-page").disabled = currentPage === totalPages;
     }
 
     function apiUrl(path) {
       return BASE_PREFIX ? `${BASE_PREFIX}/${path.replace(/^\//, "")}` : `/${path.replace(/^\//, "")}`;
+    }
+
+    uploadLink.href = apiUrl("upload");
+
+    async function loadModelInfo() {
+      try {
+        const response = await fetch(apiUrl("api/ocr-info"));
+        if (!response.ok) throw new Error("Could not load model information");
+        const info = await response.json();
+        modelInfo.textContent = `${info.provider}: ${info.model}. Pricing: ${info.pricing}.`;
+      } catch {
+        modelInfo.textContent = "Could not load extraction model information.";
+      }
+    }
+
+    async function loadExchangeRates() {
+      if (exchangeRates !== undefined) return exchangeRates;
+      try {
+        const response = await fetch("https://api.frankfurter.dev/v1/latest?base=CAD&symbols=USD,INR");
+        if (!response.ok) throw new Error("Exchange rate request failed");
+        const result = await response.json();
+        exchangeRates = { CAD: 1, ...result.rates };
+      } catch {
+        exchangeRates = null;
+      }
+      return exchangeRates;
+    }
+
+    function formatCurrency(amount, currency) {
+      try {
+        return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount);
+      } catch {
+        return `${currency} ${amount.toFixed(2)}`;
+      }
+    }
+
+    function formatReceiptTotal(receipt) {
+      if (receipt.total === null || receipt.total === undefined || receipt.total === "") return "";
+      const amount = Number(receipt.total);
+      if (!Number.isFinite(amount)) return "";
+      const storedCurrency = String(receipt.currency || "USD").trim().toUpperCase();
+      const sourceCurrency = storedCurrency === "$" || storedCurrency === "US$" ? "USD" : storedCurrency === "CA$" ? "CAD" : storedCurrency;
+      if (sourceCurrency === displayCurrency) return formatCurrency(amount, displayCurrency);
+      if (!exchangeRates || !Number.isFinite(exchangeRates[sourceCurrency]) || !Number.isFinite(exchangeRates[displayCurrency])) {
+        return formatCurrency(amount, sourceCurrency);
+      }
+      const convertedAmount = (amount / exchangeRates[sourceCurrency]) * exchangeRates[displayCurrency];
+      return formatCurrency(convertedAmount, displayCurrency);
     }
 
     async function editReceipt(id) {
@@ -118,6 +243,7 @@
     async function load() {
       setLoading("Loading receipts…");
       try {
+        await loadExchangeRates();
         const r = await fetch(apiUrl("api/receipts"));
         const payload = await r.json();
         const data = Array.isArray(payload) ? payload : Array.isArray(payload?.value) ? payload.value : [];
@@ -128,16 +254,9 @@
           return;
         }
 
-        rows.innerHTML = data.map(x => `<tr>
-          <td>${x.id}</td><td>${x.name}</td><td>${stringifyMerchant(x.merchant || x.name)}</td>
-          <td>${(x.currency || "") + (x.total ?? "")}</td><td>${x.receipt_date || ""}</td>
-          <td>${x.web_view_link ? `<a href="${x.web_view_link}" target="_blank" rel="noreferrer">Drive</a>` : ""}</td>
-          <td class="actions">
-            <button class="mini-btn edit" data-action="edit" data-id="${x.id}" data-merchant="${String(x.merchant || x.name || "").replace(/"/g, '&quot;')}">Edit</button>
-            <button class="mini-btn delete" data-action="delete" data-id="${x.id}">Delete</button>
-          </td>
-        </tr>`).join("");
-        status.textContent = `${data.length} receipt(s) loaded.`;
+        allReceipts = data;
+        renderPage();
+        status.textContent = `${data.length} receipt(s) loaded.${exchangeRates ? "" : " Exchange rates unavailable; showing original currencies."}`;
       } catch (e) {
         rows.innerHTML = "";
         renderEmptyState();
@@ -164,6 +283,7 @@
       params.delete("afterAuth");
       const nextUrl = `${window.location.pathname}${params.toString() ? `?${params.toString()}` : ""}${window.location.hash || ""}`;
       history.replaceState({}, "", nextUrl);
+      await load();
       await scanNow();
       return true;
     }
@@ -183,6 +303,36 @@
 
     document.getElementById("refresh").onclick = load;
     document.getElementById("scan").onclick = scanNow;
+    document.getElementById("previous-page").onclick = () => {
+      if (currentPage > 1) {
+        currentPage--;
+        renderPage();
+      }
+    };
+    document.getElementById("next-page").onclick = () => {
+      if (currentPage < Math.ceil(allReceipts.length / PAGE_SIZE)) {
+        currentPage++;
+        renderPage();
+      }
+    };
+    loadModelInfo();
+    currencySelect.onchange = () => {
+      displayCurrency = currencySelect.value;
+      localStorage.setItem("receiptDisplayCurrency", displayCurrency);
+      load();
+    };
+    document.getElementById("logout").onclick = async () => {
+      const logoutButton = document.getElementById("logout");
+      logoutButton.disabled = true;
+      try {
+        const response = await fetch(apiUrl("auth/logout"), { method: "POST" });
+        if (!response.ok) throw new Error("Logout request failed");
+        window.location.assign(BASE_PREFIX ? `${BASE_PREFIX}/auth` : "/auth");
+      } catch {
+        status.textContent = "Could not log out. Please try again.";
+        logoutButton.disabled = false;
+      }
+    };
 
     maybeAutoScanAfterAuth().then((didAutoScan) => {
       if (!didAutoScan) load();

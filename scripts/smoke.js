@@ -4,6 +4,7 @@
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 
 const PORT = process.env.SMOKE_PORT || 4123;
 let pass = 0, fail = 0;
@@ -39,10 +40,31 @@ const del = (p) => new Promise((res) => {
   r.on("error", () => res({ code: 0, body: "" })); r.end();
 });
 
+const waitForServer = async (srv) => {
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (srv.exitCode !== null) throw new Error(`Server exited before becoming ready (code ${srv.exitCode})`);
+    if ((await get("/healthz")).code === 200) return;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("Server did not become healthy within 15 seconds");
+};
+
 (async () => {
-  const srv = spawn("node", ["server.js"], { cwd: __dirname + "/..", env: { ...process.env, PORT: String(PORT) } });
-  await new Promise((r) => setTimeout(r, 1500));
+  const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "receipt-scanner-smoke-"));
+  const srv = spawn("node", ["server.js"], {
+    cwd: path.join(__dirname, ".."),
+    env: {
+      ...process.env,
+      PORT: String(PORT),
+      DB_PATH: path.join(testDir, "receipts.db"),
+      RECEIPTS_DIR: path.join(testDir, ".receipts"),
+      GOOGLE_CLIENT_ID: "",
+      GOOGLE_CLIENT_SECRET: "",
+    },
+  });
   try {
+    await waitForServer(srv);
     const c = await post("/api/receipts", { name: "Smoke", merchant: "X", total: 1, currency: "$" });
     check("POST /api/receipts -> 201", c.code === 201, "code=" + c.code);
     const id = JSON.parse(c.body).id;
@@ -51,12 +73,16 @@ const del = (p) => new Promise((res) => {
     check("DELETE /api/receipts/:id -> 204", (await del(`/api/receipts/${id}`)).code === 204);
     const h = await get("/healthz");
     check("GET /healthz -> 200 {ok:true}", h.code === 200 && /"ok":true/.test(h.body), "code=" + h.code);
+    const model = await get("/api/ocr-info");
+    check("GET /api/ocr-info reports local model", model.code === 200 && /Tesseract\.js English/.test(model.body) && /no per-page cloud charge/.test(model.body), "code=" + model.code);
     const sc = await post("/api/scan", {});
     check("POST /api/scan graceful without creds", sc.code === 500 && /Not authenticated/.test(sc.body), "code=" + sc.code);
   } finally {
-    srv.kill();
-    ["receipts.db", "receipts.db-wal", "receipts.db-shm"].forEach((f) => { try { fs.unlinkSync(path.join(__dirname, "..", f)); } catch {} });
-    try { fs.rmSync(path.join(__dirname, "..", ".receipts"), { recursive: true, force: true }); } catch {}
+    if (srv.exitCode === null) {
+      srv.kill();
+      await new Promise((resolve) => srv.once("exit", resolve));
+    }
+    fs.rmSync(testDir, { recursive: true, force: true });
   }
   console.log(`\nSMOKE: ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

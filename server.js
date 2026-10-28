@@ -3,9 +3,11 @@ require("dotenv").config();
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
+const multer = require("multer");
 const { stmt } = require("./src/db");
 const { authUrl, exchangeCode } = require("./src/drive");
 const { scan } = require("./src/scan");
+const { extract, detectDocumentType, getOcrInfo } = require("./src/ocr");
 
 const app = express();
 app.use(express.json());
@@ -15,6 +17,10 @@ app.use(express.json());
 // behind a proxy prefix. The browser page also derives its base from the actual
 // URL to avoid broken local root requests.
 const BASE_PATH = process.env.BASE_PATH || "";
+const uploadPdfFiles = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: 5, fileSize: 10 * 1024 * 1024, parts: 5 },
+}).array("files", 5);
 
 function hasSavedToken() {
   const tokenPath = path.join(__dirname, "token.json");
@@ -33,6 +39,26 @@ function noCache(res) {
   res.set("Expires", "0");
 }
 
+function requestBasePath(req) {
+  if (BASE_PATH) return BASE_PATH;
+  return req.path === "/receipt" || req.path.startsWith("/receipt/") ? "/receipt" : "";
+}
+
+function authErrorPage(title, message, basePath) {
+  const signInPath = `${basePath}/auth`;
+  const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  })[character]);
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${escapeHtml(title)} | Receipt Scanner</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f172a;color:#e2e8f0;font:16px system-ui,sans-serif}.panel{width:min(420px,calc(100% - 40px));text-align:center}.mark{font-size:32px}h1{font-size:26px;margin:14px 0 8px}.muted{color:#94a3b8;line-height:1.5}.button{margin:24px auto 0;display:flex;align-items:center;justify-content:center;width:100%;min-height:48px;border:0;border-radius:6px;background:#2563eb;color:white;font-size:15px;font-weight:600;text-decoration:none}</style></head>
+<body><main class="panel"><div class="mark" aria-hidden="true">&#128221;</div><h1>${escapeHtml(title)}</h1><p class="muted">${escapeHtml(message)}</p><a class="button" href="${escapeHtml(signInPath)}">Back to sign in</a></main></body></html>`;
+}
+
 // Lightweight liveness probe — no DB/Google dependency, so the container
 // reports healthy as soon as it's listening (helps `docker ps` + Traefik
 // detect a dead scanner instead of silently falling through to the portfolio).
@@ -44,31 +70,110 @@ app.get("/healthz", (_req, res) => {
 app.get(["/auth", "/receipt/auth"], (req, res) => {
   try {
     noCache(res);
-    if (hasSavedToken()) return res.redirect("/");
+    const basePath = requestBasePath(req);
+    if (hasSavedToken()) return res.redirect(`${basePath}/`);
+    const startPath = `${basePath}/auth/start`;
+    res.type("html").send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in | Receipt Scanner</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f172a;color:#e2e8f0;font:16px system-ui,sans-serif}.panel{width:min(420px,calc(100% - 40px));text-align:center}.mark{font-size:32px}h1{font-size:26px;margin:14px 0 8px}.muted{color:#94a3b8;line-height:1.5}.button{margin:24px auto 0;display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:48px;border:0;border-radius:6px;background:#2563eb;color:white;font-size:15px;font-weight:600;cursor:pointer}.button:disabled{opacity:.75;cursor:wait}.spinner{width:16px;height:16px;border:2px solid #475569;border-top-color:#60a5fa;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}[hidden]{display:none!important}</style></head>
+<body><main class="panel"><div class="mark" aria-hidden="true">&#128221;</div><h1>Sign in to Receipt Scanner</h1><p class="muted">Connect your Google account to view and scan receipts in Drive.</p><button class="button" id="login">Continue with Google</button><p class="muted" id="loading" role="status" hidden><span class="spinner" aria-hidden="true" style="display:inline-block;vertical-align:middle;margin-right:8px"></span>Connecting to Google...</p></main>
+<script>document.getElementById("login").addEventListener("click",function(){this.disabled=true;document.getElementById("loading").hidden=false;window.location.assign(${JSON.stringify(startPath)});});</script></body></html>`);
+  } catch (e) {
+    noCache(res);
+    res.status(500).type("html").send(authErrorPage("Sign-in unavailable", e.message, requestBasePath(req)));
+  }
+});
+
+app.get(["/auth/start", "/receipt/auth/start"], (req, res) => {
+  try {
+    noCache(res);
     res.redirect(authUrl());
   } catch (e) {
     noCache(res);
-    res.status(500).send(`<h1>Auth not configured</h1><p>${e.message}</p>`);
+    res.status(500).type("html").send(authErrorPage("Sign-in unavailable", e.message, requestBasePath(req)));
   }
+});
+
+app.post(["/auth/logout", "/receipt/auth/logout"], (req, res) => {
+  noCache(res);
+  const tokenPath = path.join(__dirname, "token.json");
+  if (fs.existsSync(tokenPath)) fs.unlinkSync(tokenPath);
+  res.status(204).end();
 });
 
 app.get(["/oauth2callback", "/receipt/oauth2callback"], async (req, res) => {
   try {
     noCache(res);
     await exchangeCode(req.query.code);
-    const redirectTarget = BASE_PATH ? `${BASE_PATH}/?afterAuth=1` : "/?afterAuth=1";
-    return res.redirect(redirectTarget);
+    const basePath = requestBasePath(req);
+    const redirectTarget = `${basePath}/?afterAuth=1`;
+    return res.type("html").send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Cache-Control" content="no-store"><title>Authenticated | Receipt Scanner</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f172a;color:#e2e8f0;font:16px system-ui,sans-serif}.panel{text-align:center;padding:24px}.spinner{width:24px;height:24px;margin:0 auto 18px;border:3px solid #475569;border-top-color:#60a5fa;border-radius:50%;animation:spin .8s linear infinite}h1{font-size:24px;margin:0 0 8px}.muted{color:#94a3b8}@keyframes spin{to{transform:rotate(360deg)}}</style></head>
+<body><main class="panel"><div class="spinner" role="status" aria-label="Redirecting"></div><h1>You are authenticated.</h1><p class="muted">Redirecting to Receipt Scanner...</p></main>
+<script>window.setTimeout(function(){window.location.replace(${JSON.stringify(redirectTarget)});},1200);</script></body></html>`);
   } catch (e) {
     noCache(res);
-    res.status(500).send(`<h1>Auth failed</h1><p>${e.message}</p>`);
+    res.status(500).type("html").send(authErrorPage("Google sign-in failed", e.message, requestBasePath(req)));
   }
 });
 
 // ---------- REST CRUD ----------
 const api = express.Router();
 
+api.get("/ocr-info", (_req, res) => {
+  res.json(getOcrInfo());
+});
+
+api.post("/uploads", (req, res, next) => {
+  if (!hasSavedToken()) return res.status(401).json({ error: "Sign in with Google before uploading receipts." });
+  uploadPdfFiles(req, res, (error) => {
+    if (!error) return next();
+    const tooManyFiles = error.code === "LIMIT_FILE_COUNT" || error.code === "LIMIT_UNEXPECTED_FILE";
+    const status = error.code === "LIMIT_FILE_SIZE" || tooManyFiles ? 413 : 400;
+    res.status(status).json({ error: tooManyFiles ? "Upload up to five PDFs at a time." : error.message });
+  });
+}, async (req, res) => {
+  if (!req.files?.length) return res.status(400).json({ error: "Choose at least one PDF to upload." });
+  const results = [];
+
+  for (const file of req.files) {
+    const name = path.basename(file.originalname || "upload.pdf");
+    if (!name.toLowerCase().endsWith(".pdf") || file.mimetype !== "application/pdf" || file.buffer.subarray(0, 5).toString("ascii") !== "%PDF-") {
+      results.push({ name, error: "This file is not a valid PDF." });
+      continue;
+    }
+
+    try {
+      const fields = await extract(file.buffer, "application/pdf", name);
+      if (!fields.raw_text.trim()) throw new Error("No readable text found in this PDF.");
+      const info = stmt.insert.run({
+        drive_file_id: null,
+        name,
+        mime_type: "application/pdf",
+        web_view_link: null,
+        thumbnail_link: null,
+        created_time: new Date().toISOString(),
+        raw_text: fields.raw_text,
+        merchant: fields.merchant,
+        total: fields.total,
+        currency: fields.currency,
+        receipt_date: fields.receipt_date,
+      });
+      results.push({ id: Number(info.lastInsertRowid), name, merchant: fields.merchant, document_type: fields.document_type, total: fields.total, currency: fields.currency, receipt_date: fields.receipt_date });
+    } catch (error) {
+      results.push({ name, error: error.message || "Could not process this PDF." });
+    }
+  }
+
+  res.status(200).json({ results });
+});
+
 api.get("/receipts", (req, res) => {
-  res.json(stmt.list.all());
+  res.json(stmt.list.all().map((receipt) => ({
+    ...receipt,
+    document_type: detectDocumentType(receipt.raw_text, receipt.name),
+  })));
 });
 
 api.get("/receipts/:id", (req, res) => {
@@ -130,14 +235,24 @@ api.post("/scan", async (req, res) => {
 
 app.use("/api", api);
 
+app.get(["/upload", "/receipt/upload"], (req, res) => {
+  noCache(res);
+  const basePath = requestBasePath(req);
+  if (!hasSavedToken()) return res.redirect(`${basePath}/auth`);
+  const html = fs.readFileSync(path.join(__dirname, "public", "upload.html"), "utf8")
+    .replace("/*BASE_PATH*/", JSON.stringify(basePath));
+  res.type("html").send(html);
+});
+
 // Tiny dashboard so you can trigger a scan + see results in a browser.
 // BASE_PATH is injected so links work behind a proxy prefix (e.g. /receipt).
 app.get(["/", "/receipt", "/receipt/"], (req, res) => {
   noCache(res);
 
-  if (!hasSavedToken()) return res.redirect("/auth");
+  const basePath = requestBasePath(req);
+  if (!hasSavedToken()) return res.redirect(`${basePath}/auth`);
 
-  const injectedBase = req.originalUrl.startsWith("/receipt") ? BASE_PATH || "/receipt" : "";
+  const injectedBase = basePath;
   const shouldAutoScan = req.query.afterAuth === "1";
   const html = fs
     .readFileSync(path.join(__dirname, "public", "index.html"), "utf8")

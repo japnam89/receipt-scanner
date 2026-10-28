@@ -4,56 +4,52 @@
 // higher accuracy.
 const fs = require("fs");
 const path = require("path");
-const { fileURLToPath, pathToFileURL } = require("url");
 const Tesseract = require("tesseract.js");
-const pdfParse = require("pdf-parse");
-const { getDocument } = require("pdfjs-dist/legacy/build/pdf.mjs");
-const { createCanvas } = require("canvas");
+const { PDFParse } = require("pdf-parse");
 
-const AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT = process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT || "";
-const AZURE_DOCUMENT_INTELLIGENCE_KEY = process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY || "";
+const TESSERACT_OPTIONS = {
+  langPath: path.join(__dirname, ".."),
+  gzip: false,
+};
 
-const PDFJS_STANDARD_FONT_DATA_URL = pathToFileURL(path.join(__dirname, "..", "node_modules", "pdfjs-dist", "standard_fonts")).href + "/";
-
-function installPdfjsLocalFontRead() {
-  if (globalThis.__receiptScannerPdfjsReadPatched) return;
-
-  const fsPromises = require("fs/promises");
-  const originalReadFile = fsPromises.readFile.bind(fsPromises);
-
-  fsPromises.readFile = (file, ...args) => {
-    if (typeof file === "string" && file.startsWith("file://")) {
-      return originalReadFile(fileURLToPath(file), ...args);
-    }
-    return originalReadFile(file, ...args);
-  };
-
-  globalThis.__receiptScannerPdfjsReadPatched = true;
-}
-
-const MONEY_RE = /(?:[$€£]|USD|EUR|GBP|AUD|CAD|CHF|JPY|SEK|NOK|DKK|CNY|RMB|INR|HKD)\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?)/gi;
+const MONEY_RE = /(?:[$€£₹]|USD|EUR|GBP|AUD|CAD|CHF|JPY|SEK|NOK|DKK|CNY|RMB|INR|HKD)\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?)/gi;
 const NO_CURRENCY_MONEY_RE = /(?<!\d)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?)(?!\d)/g;
 const DATE_RE = /\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2}|(?:0?[1-9]|[12][0-9]|3[01])\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*,?\s*\d{4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s*\d{4}|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*,?\s*\d{4})\b/gi;
-const TOTAL_KEYWORDS = /total|amount due|grand total|balance due|net total|amount/i;
 const DATE_KEYWORDS = /date|issued|invoice date|receipt date|paid on/i;
 
 function firstMoney(text) {
-  const matches = [...text.matchAll(MONEY_RE)];
-  const fallback = [...text.matchAll(NO_CURRENCY_MONEY_RE)];
-  const candidates = [...matches.map((m) => m[1]), ...fallback.map((m) => m[1])];
+  const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const strongTotal = /\b(?:grand\s+total|total\s+due|amount\s+due|balance\s+due|net\s+total)\b/i;
+  const plainTotal = /\btotal\b/i;
+  const parseValues = (line) => {
+    const marked = [...line.matchAll(MONEY_RE)].map((match) => match[1]);
+    const values = marked.length ? marked : [...line.matchAll(NO_CURRENCY_MONEY_RE)].map((match) => match[1]);
+    return values.map((value) => Number(value.replace(/,/g, ""))).filter(Number.isFinite);
+  };
 
-  if (!candidates.length) return null;
+  const labeledTotals = [];
+  const plainTotals = [];
+  const markedAmounts = [];
+  const decimalAmounts = [];
 
-  const cleaned = candidates
-    .map((value) => value.replace(/,/g, ""))
-    .filter((value) => !Number.isNaN(Number(value)));
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    const marked = [...line.matchAll(MONEY_RE)].map((match) => Number(match[1].replace(/,/g, ""))).filter(Number.isFinite);
+    markedAmounts.push(...marked);
+    decimalAmounts.push(...parseValues(line).filter((value) => !Number.isInteger(value)));
 
-  if (!cleaned.length) return null;
+    let values = parseValues(line);
+    if (!values.length && index + 1 < lines.length) values = parseValues(lines[index + 1]);
+    if (strongTotal.test(line) && values.length) labeledTotals.push(values[values.length - 1]);
+    else if (plainTotal.test(line) && !/\b(?:sub|line|tax)\s*total\b/i.test(line) && values.length) {
+      plainTotals.push(values[values.length - 1]);
+    }
+  }
 
-  const withContext = cleaned.map((value) => ({ value: parseFloat(value), text: text.slice(Math.max(0, text.indexOf(value) - 24), text.indexOf(value) + 24) }));
-  const preferred = withContext.find((entry) => TOTAL_KEYWORDS.test(entry.text));
-  const best = preferred ? preferred.value : withContext.reduce((max, entry) => entry.value > max.value ? entry : max, withContext[0]).value;
-  return best;
+  if (labeledTotals.length) return labeledTotals[labeledTotals.length - 1];
+  if (plainTotals.length) return plainTotals[plainTotals.length - 1];
+  if (markedAmounts.length) return Math.max(...markedAmounts);
+  return decimalAmounts.length ? Math.max(...decimalAmounts) : null;
 }
 
 function firstDate(text) {
@@ -91,160 +87,88 @@ function cleanMerchantName(value) {
 }
 
 function guessMerchant(text, filename) {
-  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
-  const preferred = lines
-    .filter((line) => /[A-Za-z]/.test(line) && line.length > 3 && line.length < 60)
-    .find((line) => !/(total|amount|date|invoice|receipt|payment|bill)/i.test(line));
+  const lines = String(text).split(/\r?\n/).map((line) => line.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const rejectedLine = /\b(?:page|settlement|invoice|receipt|confirmation|order|reference|rma|date|total|amount|payment|balance|bill|account|customer|subtotal|tax|shipping address|billing address|gst|hst|paid in full)\b/i;
+  const isCandidate = (line) => line.length > 3 &&
+    line.length < 70 &&
+    /[A-Za-z]{3}/.test(line) &&
+    !rejectedLine.test(line) &&
+    !/\d{3,}/.test(line) &&
+    !/^[A-Z][A-Z'’-]+(?:\s+[A-Z][A-Z'’-]+){1,3}[,]?$/.test(line);
 
-  const candidate = preferred || filename.replace(/\.[^.]+$/, "");
-  return cleanMerchantName(candidate);
+  const returnHeader = lines
+    .map((line) => line.match(/shipping address\s+([A-Za-z][A-Za-z &'’-]+?)\s+return(?:\s+location)?\b/i)?.[1])
+    .find(Boolean);
+  if (returnHeader) return cleanMerchantName(returnHeader);
+
+  const companyName = lines.find((line) =>
+    /\b(?:incorporated|inc\.?|limited|ltd\.?|llc|corp\.?|corporation|gmbh)\b/i.test(line) && isCandidate(line),
+  );
+  if (companyName) return cleanMerchantName(companyName);
+
+  const labeledName = lines
+    .map((line) => line.match(/^(?:merchant|seller|sold by|billed by|vendor|store)\s*[:#-]?\s*(.{4,65})$/i)?.[1])
+    .find((candidate) => candidate && isCandidate(candidate));
+  if (labeledName) return cleanMerchantName(labeledName);
+
+  const filenameStem = path.basename(filename || "", path.extname(filename || ""));
+  const filenameCandidate = filenameStem
+    .replace(/[_-]+/g, " ")
+    .replace(/\b(?:email|receipt|invoice|order|confirmation|statement|bill|payment|download|scan)\b/gi, " ")
+    .replace(/\b\d{4,}\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!/^[A-Za-z0-9_-]{20,}$/.test(filenameStem) && isCandidate(filenameCandidate)) return cleanMerchantName(filenameCandidate);
+
+  const domain = String(text).match(/(?:https?:\/\/)?(?:www\.)?(\d*[a-z][a-z0-9-]*)\.(?:com|ca|net|org)\b/i)?.[1];
+  if (domain && /^\d+[a-z]+$/i.test(domain)) {
+    const numericBrand = domain.match(/^(\d+)([a-z]+)$/i);
+    return `${numericBrand[1]} ${numericBrand[2].toUpperCase()}`;
+  }
+
+  const preferred = lines.find(isCandidate);
+  return preferred ? cleanMerchantName(preferred) : "Unknown merchant";
 }
 
-function normalizeNumberString(value) {
-  if (value === null || value === undefined || value === "") return null;
-  const cleaned = String(value)
-    .replace(/[,$\s]/g, "")
-    .replace(/[()]/g, (match) => (match === "(" ? "-" : ""));
-  const numeric = Number.parseFloat(cleaned);
-  return Number.isFinite(numeric) ? numeric : null;
-}
-
-function extractAzureResult(result) {
-  const analyzeResult = result?.analyzeResult || result;
-  const document = analyzeResult?.documents?.[0] || result?.documents?.[0] || {};
-  const fields = document.fields || {};
-
-  const merchant =
-    fields.MerchantName?.content ||
-    fields.MerchantName?.valueString ||
-    fields.Merchant?.content ||
-    fields.Merchant?.valueString ||
-    fields.vendorName?.content ||
-    fields.vendorName?.valueString ||
-    "";
-
-  const totalValue =
-    fields.Total?.valueNumber ??
-    normalizeNumberString(fields.Total?.content) ??
-    normalizeNumberString(fields.Total?.valueString) ??
-    null;
-
-  const currency =
-    fields.Total?.valueCurrency?.currencyCode ||
-    fields.Total?.valueCurrency?.currencySymbol ||
-    fields.Total?.currencyCode ||
-    "USD";
-
-  const dateValue =
-    fields.TransactionDate?.valueDate ||
-    fields.TransactionDate?.content ||
-    fields.ReceiptDate?.valueDate ||
-    fields.ReceiptDate?.content ||
-    fields.Date?.valueDate ||
-    fields.Date?.content ||
-    null;
-
-  const rawText = (analyzeResult?.pages || result?.pages || [])
-    .map((page) => page.lines?.map((line) => line.content).join(" "))
-    .filter(Boolean)
-    .join("\n");
-
-  return {
-    raw_text: rawText,
-    merchant: merchant || "Unknown merchant",
-    total: totalValue,
-    currency,
-    receipt_date: dateValue,
-  };
-}
-
-async function extractWithAzureDocumentIntelligence(buf) {
-  if (!AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT || !AZURE_DOCUMENT_INTELLIGENCE_KEY) {
-    return null;
-  }
-
-  const url = new URL("/formrecognizer/documentModels/prebuilt-receipt:analyze?api-version=2023-07-31", AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT);
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Ocp-Apim-Subscription-Key": AZURE_DOCUMENT_INTELLIGENCE_KEY,
-      "Content-Type": "application/octet-stream",
-    },
-    body: buf,
-  });
-
-  if (!response.ok) {
-    throw new Error(`Azure Document Intelligence request failed: ${response.status}`);
-  }
-
-  const operationLocation = response.headers.get("operation-location") || response.headers.get("Operation-Location");
-  if (!operationLocation) {
-    throw new Error("Azure Document Intelligence did not return an operation URL");
-  }
-
-  let result;
-  for (let i = 0; i < 30; i++) {
-    const poll = await fetch(operationLocation, {
-      method: "GET",
-      headers: { "Ocp-Apim-Subscription-Key": AZURE_DOCUMENT_INTELLIGENCE_KEY },
-    });
-    if (!poll.ok) {
-      throw new Error(`Azure Document Intelligence polling failed: ${poll.status}`);
-    }
-    result = await poll.json();
-    if (result.status === "succeeded" || result.status === "failed") {
-      break;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-
-  if (result?.status !== "succeeded") {
-    throw new Error("Azure Document Intelligence did not finish successfully");
-  }
-
-  return extractAzureResult(result);
-}
-
-async function renderPdfToOcrText(buf) {
-  try {
-    installPdfjsLocalFontRead();
-    const loadingTask = getDocument({
-      data: new Uint8Array(buf),
-      standardFontDataUrl: PDFJS_STANDARD_FONT_DATA_URL,
-    });
-    const pdf = await loadingTask.promise;
-    let pagesText = "";
-
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const viewport = page.getViewport({ scale: 1.5 });
-      const canvas = createCanvas(viewport.width, viewport.height);
-      const context = canvas.getContext("2d");
-      await page.render({ canvasContext: context, viewport }).promise;
-      const { data } = await Tesseract.recognize(canvas.toBuffer("image/png"), "eng");
-      if (data?.text) pagesText += `\n${data.text}`;
-    }
-
-    return pagesText.trim();
-  } catch {
-    return "";
-  }
+function detectDocumentType(text, filename = "") {
+  const title = path.basename(filename || "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().replace(/[._-]+/g, " ");
+  const opening = String(text).split(/\r?\n/).slice(0, 8).join(" ").toLowerCase();
+  const content = `${title}\n${opening}`;
+  if (/\bauction sale\b|\bwinning bidders?\b|\bbidcard\b|\bbid card\b|\bauction\b.*\b(?:invoice|receipt|sale)\b/.test(content)) return "Auction";
+  if (/order\s*confirmation/.test(title) || /\border confirmation\b/.test(opening)) return "Order";
+  if (/\bbill\b|\bbilling period\b/.test(title) || /\b(?:bill date|billing period|monthly bill|utility bill|bill statement)\b/.test(opening)) return "Bill";
+  if (/\binvoice\b/.test(title) || /\binvoice\b/.test(opening)) return "Invoice";
+  if (/\bstatement\b/.test(title) || /\bstatement\b/.test(opening)) return "Statement";
+  if (/\b(?:payment confirmation|payment receipt|receipt of payment|paid in full|payment received)\b/.test(opening)) return "Payment";
+  if (/\breceipt\b/.test(title) || /\breceipt\b/.test(opening)) return "Receipt";
+  if (/\bpayment\b/.test(opening)) return "Payment";
+  return "Other";
 }
 
 async function ocrBuffer(buf, mimeType) {
   if (mimeType === "application/pdf") {
+    const parser = new PDFParse({ data: buf });
+    let text = "";
     try {
-      const parsed = await pdfParse(buf);
-      if (parsed.text && parsed.text.trim()) return parsed.text;
-      return await renderPdfToOcrText(buf);
+      const parsed = await parser.getText();
+      text = parsed.text || "";
+      if (firstMoney(text) !== null) return text;
+      const screenshots = await parser.getScreenshot({ scale: 1.5, imageBuffer: true, imageDataUrl: false });
+      const pagesText = [];
+      for (const page of screenshots.pages) {
+        const { data } = await Tesseract.recognize(page.data, "eng", TESSERACT_OPTIONS);
+        if (data?.text) pagesText.push(data.text);
+      }
+      return [text, ...pagesText].filter(Boolean).join("\n");
     } catch {
-      return await renderPdfToOcrText(buf);
+      return text;
+    } finally {
+      await parser.destroy();
     }
   }
 
   try {
-    const { data } = await Tesseract.recognize(buf, "eng");
+    const { data } = await Tesseract.recognize(buf, "eng", TESSERACT_OPTIONS);
     return data.text || "";
   } catch {
     return "";
@@ -253,30 +177,28 @@ async function ocrBuffer(buf, mimeType) {
 
 // Extract structured fields from a downloaded file buffer.
 async function extract(buf, mimeType, filename) {
-  try {
-    const azureResult = await extractWithAzureDocumentIntelligence(buf);
-    if (azureResult) {
-      return {
-        ...azureResult,
-        raw_text: (azureResult.raw_text || "").slice(0, 20000),
-      };
-    }
-  } catch (error) {
-    // Fall back to local OCR when Azure isn't configured or returns an error.
-  }
-
   const text = await ocrBuffer(buf, mimeType);
-  const normalized = text.replace(/\r/g, "\n").replace(/\s+/g, " ").trim();
+  const normalized = text.replace(/\r/g, "\n").replace(/[\t ]+/g, " ").replace(/\n{2,}/g, "\n").trim();
   const total = firstMoney(normalized) ?? firstMoney(text);
-  const currency = (normalized.match(/\$|€|£|USD|EUR|GBP|CHF|JPY|CAD|AUD/) || ["$"])[0] || "$";
+  const currencyMatch = normalized.match(/₹|\$|€|£|USD|EUR|GBP|CHF|JPY|CAD|AUD|INR/i);
+  const currency = currencyMatch?.[0] || "$";
   const receipt_date = firstDate(normalized) ?? firstDate(text);
   return {
     raw_text: text.slice(0, 20000),
     merchant: guessMerchant(normalized || text, filename),
+    document_type: detectDocumentType(text, filename),
     total,
     currency,
     receipt_date,
   };
 }
 
-module.exports = { extract, firstMoney, firstDate, extractAzureResult };
+function getOcrInfo() {
+  return {
+    provider: "Local processing",
+    model: "Tesseract.js English (eng) + PDFParse text extraction",
+    pricing: "Runs locally; no per-page cloud charge",
+  };
+}
+
+module.exports = { extract, firstMoney, firstDate, guessMerchant, detectDocumentType, getOcrInfo };
