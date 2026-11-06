@@ -3,11 +3,16 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Upload Receipts | Receipt Scanner</title>
+  <title data-i18n="uploadReceipts">Upload Receipts | Receipt Scanner</title>
   <style>
     body { font-family: system-ui, sans-serif; margin: 0; min-height: 100vh; background: #0f172a; color: #e2e8f0; }
     .wrap { max-width: 760px; margin: 0 auto; padding: 24px; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 36px; }
+    .header-controls { display: flex; align-items: center; gap: 16px; }
+    .account-profile { display: grid; gap: 2px; max-width: 260px; text-align: right; overflow-wrap: anywhere; }
+    .account-name { font-size: 14px; font-weight: 600; }
+    .account-email { color: #94a3b8; font-size: 13px; }
+    .language-control { display: flex; align-items: center; gap: 8px; color: #cbd5e1; font-size: 14px; }
     h1 { margin: 0; font-size: 24px; }
     h2 { margin: 0 0 8px; font-size: 17px; }
     p { line-height: 1.5; }
@@ -32,6 +37,8 @@
     @media (max-width: 520px) {
       .wrap { padding: 18px; }
       header { align-items: flex-start; flex-direction: column; margin-bottom: 26px; }
+      .header-controls { align-items: flex-start; flex-direction: column; gap: 12px; }
+      .account-profile { text-align: left; max-width: 100%; }
       .dropzone { padding: 28px 14px; }
       .file-item, .result-item { align-items: flex-start; }
     }
@@ -40,33 +47,41 @@
 <body>
   <main class="wrap">
     <header>
-      <h1>Upload receipts</h1>
-      <a class="back-link" id="back-link" href="/">Back to receipt list</a>
+      <h1 data-i18n="uploadReceipts">Upload receipts</h1>
+      <div class="header-controls">
+        <div id="account-profile" class="account-profile" aria-live="polite" hidden>
+          <span id="account-name" class="account-name"></span>
+          <span id="account-email" class="account-email"></span>
+        </div>
+        <label class="language-control" for="language-select"><span data-i18n="language">Language</span><select id="language-select" data-i18n-aria-label="language"><option value="en">English</option><option value="hi">हिन्दी</option><option value="pa">ਪੰਜਾਬੀ</option></select></label>
+        <a class="back-link" id="back-link" href="/" data-i18n="backToList">Back to receipt list</a>
+      </div>
     </header>
 
     <section aria-labelledby="upload-heading">
-      <h2 id="upload-heading">Choose PDF files</h2>
-      <p class="hint">Upload up to five PDFs at a time. Each file can be up to 10 MB. Files are processed locally.</p>
+      <h2 id="upload-heading" data-i18n="choosePdf">Choose PDF files</h2>
+      <p class="hint" data-i18n="uploadInstructions">Upload up to five PDFs at a time. Each file can be up to 10 MB. Files are processed locally.</p>
       <form id="upload-form">
         <label class="dropzone" id="dropzone" for="file-picker" tabindex="0">
           <span class="upload-icon" aria-hidden="true">&#8593;</span>
-          <strong>Drop PDF files here or browse</strong>
-          <span class="hint" id="selection-count">No files selected</span>
+          <strong data-i18n="dropOrBrowse">Drop PDF files here or browse</strong>
+          <span class="hint" id="selection-count" data-i18n="noFilesSelected">No files selected</span>
         </label>
         <input class="file-input" id="file-picker" name="files" type="file" accept="application/pdf,.pdf" multiple />
-        <ul class="file-list" id="file-list" aria-label="Selected files"></ul>
+        <ul class="file-list" id="file-list" aria-label="Selected files" data-i18n-aria-label="selectedFiles"></ul>
         <div class="actions">
-          <button id="upload-button" type="submit" disabled>Upload and scan</button>
-          <button id="clear-button" class="ghost" type="button" disabled>Clear selection</button>
+          <button id="upload-button" type="submit" disabled data-i18n="uploadAndScan">Upload and scan</button>
+          <button id="clear-button" class="ghost" type="button" disabled data-i18n="clearSelection">Clear selection</button>
         </div>
       </form>
       <p class="hint" id="upload-status" role="status" aria-live="polite"></p>
-      <ul class="result-list" id="result-list" aria-label="Upload results"></ul>
+      <ul class="result-list" id="result-list" aria-label="Upload results" data-i18n-aria-label="uploadResults"></ul>
     </section>
   </main>
 
+  <script src="/*I18N_SCRIPT*/"></script>
   <script>
-    const BASE_PATH = /*BASE_PATH*/ || "";
+    const BASE_PATH = /*BASE_PATH*/ "";
     const filePicker = document.getElementById("file-picker");
     const dropzone = document.getElementById("dropzone");
     const fileList = document.getElementById("file-list");
@@ -75,14 +90,68 @@
     const clearButton = document.getElementById("clear-button");
     const uploadStatus = document.getElementById("upload-status");
     const selectionCount = document.getElementById("selection-count");
+    const accountProfile = document.getElementById("account-profile");
+    const accountName = document.getElementById("account-name");
+    const accountEmail = document.getElementById("account-email");
+    const t = window.receiptI18n.t;
     document.getElementById("back-link").href = BASE_PATH ? `${BASE_PATH}/` : "/";
     let selectedFiles = [];
+    let uploadInProgress = false;
+    let uploadStatusMessage = null;
+    let lastResults = [];
+
+    async function loadProfile() {
+      try {
+        const response = await fetch(`${BASE_PATH}/api/profile`);
+        if (!response.ok) throw new Error("Profile unavailable");
+        const profile = await response.json();
+        accountName.textContent = profile.name || profile.email || t("accountName");
+        accountEmail.textContent = profile.email;
+        accountProfile.hidden = false;
+      } catch {
+        accountProfile.hidden = true;
+      }
+    }
+
+    function showMessage(key, values = {}, className = "hint") {
+      uploadStatusMessage = { key, values, className };
+      uploadStatus.textContent = t(key, values);
+      uploadStatus.className = className;
+    }
+
+    function showRawMessage(text, className) {
+      uploadStatusMessage = { text, className };
+      uploadStatus.textContent = text;
+      uploadStatus.className = className;
+    }
+
+    function renderUploadMessage() {
+      if (!uploadStatusMessage) return;
+      if (uploadStatusMessage.key) {
+        uploadStatus.textContent = t(uploadStatusMessage.key, uploadStatusMessage.values);
+      } else {
+        uploadStatus.textContent = uploadStatusMessage.text;
+      }
+      uploadStatus.className = uploadStatusMessage.className;
+    }
+
+    function renderResults(results) {
+      resultList.replaceChildren();
+      results.forEach((result) => {
+        const item = document.createElement("li");
+        item.className = `result-item ${result.error ? "error" : "success"}`;
+        item.textContent = result.error
+          ? `${result.name}: ${result.error}`
+          : `${result.name}: ${window.receiptI18n.documentType(result.document_type)} · ${result.merchant || t("unknownMerchant")} · ${result.total === null ? t("amountNotDetected") : `${result.currency || ""}${result.total}`}`;
+        resultList.append(item);
+      });
+    }
 
     function renderSelection() {
       fileList.replaceChildren();
-      selectionCount.textContent = selectedFiles.length ? `${selectedFiles.length} of 5 files selected` : "No files selected";
-      uploadButton.disabled = selectedFiles.length === 0;
-      clearButton.disabled = selectedFiles.length === 0;
+      selectionCount.textContent = selectedFiles.length ? t("selectedCount", { count: selectedFiles.length }) : t("noFilesSelected");
+      uploadButton.disabled = uploadInProgress || selectedFiles.length === 0;
+      clearButton.disabled = uploadInProgress || selectedFiles.length === 0;
 
       selectedFiles.forEach((file, index) => {
         const item = document.createElement("li");
@@ -93,8 +162,8 @@
         const remove = document.createElement("button");
         remove.className = "remove";
         remove.type = "button";
-        remove.textContent = "Remove";
-        remove.setAttribute("aria-label", `Remove ${file.name}`);
+        remove.textContent = t("remove");
+        remove.setAttribute("aria-label", `${t("remove")} ${file.name}`);
         remove.addEventListener("click", () => {
           selectedFiles = selectedFiles.filter((_, itemIndex) => itemIndex !== index);
           renderSelection();
@@ -107,25 +176,21 @@
     function addFiles(fileCollection) {
       const incoming = Array.from(fileCollection);
       if (selectedFiles.length + incoming.length > 5) {
-        uploadStatus.textContent = "Choose no more than five PDFs.";
-        uploadStatus.className = "error";
+        showMessage("chooseAtMostFive", {}, "error");
         return;
       }
       const invalidFile = incoming.find((file) => !file.name.toLowerCase().endsWith(".pdf") || (file.type && file.type !== "application/pdf"));
       if (invalidFile) {
-        uploadStatus.textContent = `${invalidFile.name} is not a PDF.`;
-        uploadStatus.className = "error";
+        showMessage("notPdf", { name: invalidFile.name }, "error");
         return;
       }
       const oversizedFile = incoming.find((file) => file.size > 10 * 1024 * 1024);
       if (oversizedFile) {
-        uploadStatus.textContent = `${oversizedFile.name} exceeds the 10 MB limit.`;
-        uploadStatus.className = "error";
+        showMessage("fileTooLarge", { name: oversizedFile.name }, "error");
         return;
       }
       selectedFiles = [...selectedFiles, ...incoming];
-      uploadStatus.textContent = "";
-      uploadStatus.className = "hint";
+      showMessage("");
       renderSelection();
     }
 
@@ -150,20 +215,22 @@
     dropzone.addEventListener("drop", (event) => addFiles(event.dataTransfer.files));
     clearButton.addEventListener("click", () => {
       selectedFiles = [];
-      uploadStatus.textContent = "";
-      resultList.replaceChildren();
+      showMessage("");
+      lastResults = [];
+      renderResults(lastResults);
       renderSelection();
     });
 
     document.getElementById("upload-form").addEventListener("submit", async (event) => {
       event.preventDefault();
       if (!selectedFiles.length) return;
+      uploadInProgress = true;
       uploadButton.disabled = true;
       clearButton.disabled = true;
-      uploadButton.textContent = "Processing…";
-      uploadStatus.textContent = "Uploading and scanning PDFs locally…";
-      uploadStatus.className = "hint";
-      resultList.replaceChildren();
+      uploadButton.textContent = t("processing");
+      showMessage("uploadingLocally");
+      lastResults = [];
+      renderResults(lastResults);
 
       const formData = new FormData();
       selectedFiles.forEach((file) => formData.append("files", file));
@@ -171,30 +238,32 @@
         const response = await fetch(`${BASE_PATH}/api/uploads`, { method: "POST", body: formData });
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.error || "Upload failed.");
-        payload.results.forEach((result) => {
-          const item = document.createElement("li");
-          item.className = `result-item ${result.error ? "error" : "success"}`;
-          item.textContent = result.error
-            ? `${result.name}: ${result.error}`
-            : `${result.name}: ${result.document_type || "Other"} · ${result.merchant || "Unknown merchant"} · ${result.total === null ? "Amount not detected" : `${result.currency || ""}${result.total}`}`;
-          resultList.append(item);
-        });
+        lastResults = payload.results;
+        renderResults(lastResults);
         const succeeded = payload.results.filter((result) => !result.error).length;
-        uploadStatus.textContent = `${succeeded} of ${payload.results.length} file(s) processed.`;
-        uploadStatus.className = succeeded ? "success" : "error";
+        showMessage("processedFiles", { succeeded, total: payload.results.length }, succeeded ? "success" : "error");
         if (succeeded === payload.results.length) {
           selectedFiles = [];
           renderSelection();
         }
       } catch (error) {
-        uploadStatus.textContent = error.message || "Upload failed. Please try again.";
-        uploadStatus.className = "error";
+        showRawMessage(error.message || t("uploadFailedRetry"), "error");
       } finally {
-        uploadButton.textContent = "Upload and scan";
+        uploadInProgress = false;
+        uploadButton.textContent = t("uploadAndScan");
         uploadButton.disabled = selectedFiles.length === 0;
         clearButton.disabled = selectedFiles.length === 0;
       }
     });
+
+    window.addEventListener("receipt-locale-change", () => {
+      renderSelection();
+      renderUploadMessage();
+      renderResults(lastResults);
+      uploadButton.textContent = t(uploadInProgress ? "processing" : "uploadAndScan");
+    });
+
+    loadProfile();
   </script>
 </body>
 </html>

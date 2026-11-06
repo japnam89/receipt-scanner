@@ -8,6 +8,8 @@ assert.strictEqual(firstMoney("Grand Total\n$42.50"), 42.5);
 assert.strictEqual(firstMoney("Reference 60472236\n2200 2450\n1 0 6"), null);
 assert.strictEqual(firstDate("20 Sep 2026"), "20 Sep 2026");
 assert.strictEqual(firstDate("Sep 20, 2026"), "Sep 20, 2026");
+assert.strictEqual(firstDate("February 13, 2026 07:00 p.m.\nPlan End Date: Feb. 12, 2029"), "February 13, 2026");
+assert.strictEqual(firstDate("Plan End Date: Feb. 12, 2029\nInvoice Date: February 13, 2026"), "February 13, 2026");
 assert.strictEqual(guessMerchant("Settlement\nJAPNAM SINGH\n2450 Main Street\nBargain Depot Canada Inc.", "invoice.pdf"), "Bargain Depot Canada Inc.");
 assert.strictEqual(guessMerchant("Shipping Address Seagate Return\nLocation\nJAPNAM SINGH", "OrderConfirmation.pdf"), "Seagate");
 assert.strictEqual(guessMerchant("Account statement\n407etr.com\nTotal amount due", "statement.pdf"), "407 ETR");

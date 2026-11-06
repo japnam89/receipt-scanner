@@ -15,7 +15,6 @@ const TESSERACT_OPTIONS = {
 const MONEY_RE = /(?:[$€£₹]|USD|EUR|GBP|AUD|CAD|CHF|JPY|SEK|NOK|DKK|CNY|RMB|INR|HKD)\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?)/gi;
 const NO_CURRENCY_MONEY_RE = /(?<!\d)(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})?|\d+(?:[.,]\d{2})?)(?!\d)/g;
 const DATE_RE = /\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}[/-]\d{1,2}[/-]\d{1,2}|(?:0?[1-9]|[12][0-9]|3[01])\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*,?\s*\d{4}|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2},?\s*\d{4}|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*,?\s*\d{4})\b/gi;
-const DATE_KEYWORDS = /date|issued|invoice date|receipt date|paid on/i;
 
 function firstMoney(text) {
   const lines = String(text).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -53,16 +52,22 @@ function firstMoney(text) {
 }
 
 function firstDate(text) {
-  const candidates = [...text.matchAll(DATE_RE)].map((m) => m[0]);
+  const source = String(text);
+  const candidates = [...source.matchAll(DATE_RE)].map((match) => {
+    const lineStart = source.lastIndexOf("\n", match.index - 1) + 1;
+    const lineEnd = source.indexOf("\n", match.index);
+    const line = source.slice(lineStart, lineEnd === -1 ? source.length : lineEnd);
+    return { value: match[0], line, prefix: source.slice(lineStart, match.index).trim() };
+  });
   if (!candidates.length) return null;
 
-  const indexed = candidates.map((value) => ({ value, index: text.indexOf(value) }));
-  const preferred = indexed.find(({ index, value }) => {
-    const context = text.slice(Math.max(0, index - 32), index + value.length + 32);
-    return DATE_KEYWORDS.test(context);
-  });
+  const excluded = /\b(?:plan|subscription)\s+(?:end|start)|\b(?:renewal|expiry|expiration|expires|due|delivery|shipped|return\s+by|warranty)\b/i;
+  const validCandidates = candidates.filter(({ line }) => !excluded.test(line));
+  const preferred = validCandidates.find(({ line, prefix }) =>
+    /(?:invoice|receipt|purchase|transaction|order)\s+date\b|\bdate\s+of\s+(?:purchase|transaction)\b|\bissued\s+on\b/i.test(`${prefix} ${line}`),
+  );
 
-  return preferred ? preferred.value : candidates[0];
+  return (preferred || validCandidates[0] || candidates[0]).value;
 }
 
 function cleanMerchantName(value) {

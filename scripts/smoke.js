@@ -75,6 +75,10 @@ const waitForServer = async (srv) => {
     check("GET /healthz -> 200 {ok:true}", h.code === 200 && /"ok":true/.test(h.body), "code=" + h.code);
     const model = await get("/api/ocr-info");
     check("GET /api/ocr-info reports local model", model.code === 200 && /Tesseract\.js English/.test(model.body) && /no per-page cloud charge/.test(model.body), "code=" + model.code);
+    const translations = await get("/i18n.js");
+    check("GET /i18n.js serves Hindi and Punjabi", translations.code === 200 && translations.body.includes("भाषा") && translations.body.includes("ਭਾਸ਼ਾ"), "code=" + translations.code);
+    const prefixedTranslations = await get("/receipt/i18n.js");
+    check("GET /receipt/i18n.js serves translations", prefixedTranslations.code === 200 && prefixedTranslations.body.includes("receiptLanguage"), "code=" + prefixedTranslations.code);
     const sc = await post("/api/scan", {});
     check("POST /api/scan graceful without creds", sc.code === 500 && /Not authenticated/.test(sc.body), "code=" + sc.code);
   } finally {

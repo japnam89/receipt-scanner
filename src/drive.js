@@ -46,6 +46,19 @@ async function exchangeCode(code) {
   return tokens;
 }
 
+async function getProfile() {
+  const client = getClient();
+  if (!client || !client.credentials?.access_token) {
+    throw new Error("Not authenticated. Run `npm run auth` first.");
+  }
+  const drive = google.drive({ version: "v3", auth: client });
+  const response = await drive.about.get({ fields: "user(displayName,emailAddress)" });
+  return {
+    name: response.data.user?.displayName || "",
+    email: response.data.user?.emailAddress || "",
+  };
+}
+
 // List files that look like receipts: images / PDFs whose name mentions
 // receipt, invoice, bill, or expense (case-insensitive). Optionally scoped to
 // a folder via GOOGLE_DRIVE_FOLDER_ID.
@@ -79,4 +92,4 @@ async function downloadFile(fileId) {
   return Buffer.from(res.data);
 }
 
-module.exports = { loadCreds, getClient, authUrl, exchangeCode, listReceiptFiles, downloadFile, TOKEN_PATH, redirectUri };
+module.exports = { loadCreds, getClient, authUrl, exchangeCode, getProfile, listReceiptFiles, downloadFile, TOKEN_PATH, redirectUri };

@@ -5,7 +5,7 @@ const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
 const { stmt } = require("./src/db");
-const { authUrl, exchangeCode } = require("./src/drive");
+const { authUrl, exchangeCode, getProfile } = require("./src/drive");
 const { scan } = require("./src/scan");
 const { extract, detectDocumentType, getOcrInfo } = require("./src/ocr");
 
@@ -66,6 +66,11 @@ app.get("/healthz", (_req, res) => {
   res.json({ ok: true, ts: Date.now() });
 });
 
+const i18nRoutePaths = [...new Set(["/i18n.js", "/receipt/i18n.js", ...(BASE_PATH ? [`${BASE_PATH.replace(/\/+$/, "")}/i18n.js`] : [])])];
+app.get(i18nRoutePaths, (_req, res) => {
+  res.type("application/javascript").sendFile(path.join(__dirname, "public", "i18n.js"));
+});
+
 // ---------- OAuth (one-time setup) ----------
 app.get(["/auth", "/receipt/auth"], (req, res) => {
   try {
@@ -73,11 +78,12 @@ app.get(["/auth", "/receipt/auth"], (req, res) => {
     const basePath = requestBasePath(req);
     if (hasSavedToken()) return res.redirect(`${basePath}/`);
     const startPath = `${basePath}/auth/start`;
+    const i18nPath = `${basePath.replace(/\/+$/, "")}/i18n.js`;
     res.type("html").send(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in | Receipt Scanner</title>
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f172a;color:#e2e8f0;font:16px system-ui,sans-serif}.panel{width:min(420px,calc(100% - 40px));text-align:center}.mark{font-size:32px}h1{font-size:26px;margin:14px 0 8px}.muted{color:#94a3b8;line-height:1.5}.button{margin:24px auto 0;display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:48px;border:0;border-radius:6px;background:#2563eb;color:white;font-size:15px;font-weight:600;cursor:pointer}.button:disabled{opacity:.75;cursor:wait}.spinner{width:16px;height:16px;border:2px solid #475569;border-top-color:#60a5fa;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}[hidden]{display:none!important}</style></head>
-<body><main class="panel"><div class="mark" aria-hidden="true">&#128221;</div><h1>Sign in to Receipt Scanner</h1><p class="muted">Connect your Google account to view and scan receipts in Drive.</p><button class="button" id="login">Continue with Google</button><p class="muted" id="loading" role="status" hidden><span class="spinner" aria-hidden="true" style="display:inline-block;vertical-align:middle;margin-right:8px"></span>Connecting to Google...</p></main>
-<script>document.getElementById("login").addEventListener("click",function(){this.disabled=true;document.getElementById("loading").hidden=false;window.location.assign(${JSON.stringify(startPath)});});</script></body></html>`);
+  <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title data-i18n="signIn">Sign in | Receipt Scanner</title>
+  <style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0f172a;color:#e2e8f0;font:16px system-ui,sans-serif}.panel{width:min(420px,calc(100% - 40px));text-align:center}.mark{font-size:32px}h1{font-size:26px;margin:14px 0 8px}.muted{color:#94a3b8;line-height:1.5}.language-control{display:flex;justify-content:center;align-items:center;gap:8px;margin:18px auto;color:#cbd5e1;font-size:14px}select{min-height:40px;padding:8px 10px;border:1px solid #475569;border-radius:6px;background:#1e293b;color:#e2e8f0;font-size:14px}.button{margin:24px auto 0;display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:48px;border:0;border-radius:6px;background:#2563eb;color:white;font-size:15px;font-weight:600;cursor:pointer}.button:disabled{opacity:.75;cursor:wait}.spinner{width:16px;height:16px;border:2px solid #475569;border-top-color:#60a5fa;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}[hidden]{display:none!important}</style><script src="${i18nPath}" defer></script></head>
+  <body><main class="panel"><div class="mark" aria-hidden="true">&#128221;</div><label class="language-control" for="language-select"><span data-i18n="language">Language</span><select id="language-select" data-i18n-aria-label="language"><option value="en">English</option><option value="hi">हिन्दी</option><option value="pa">ਪੰਜਾਬੀ</option></select></label><h1 data-i18n="signInTitle">Sign in to Receipt Scanner</h1><p class="muted" data-i18n="connectGoogle">Connect your Google account to view and scan receipts in Drive.</p><button class="button" id="login" aria-busy="false"><span class="spinner" id="login-spinner" aria-hidden="true" hidden></span><span data-i18n="continueGoogle">Continue with Google</span></button><p class="muted" id="loading" role="status" aria-live="polite" hidden><span class="spinner" aria-hidden="true" style="display:inline-block;vertical-align:middle;margin-right:8px"></span><span data-i18n="connectingGoogle">Connecting to Google...</span></p></main>
+<script>document.getElementById("login").addEventListener("click",function(){this.disabled=true;this.setAttribute("aria-busy","true");document.getElementById("login-spinner").hidden=false;document.getElementById("loading").hidden=false;window.location.assign(${JSON.stringify(startPath)});});</script></body></html>`);
   } catch (e) {
     noCache(res);
     res.status(500).type("html").send(authErrorPage("Sign-in unavailable", e.message, requestBasePath(req)));
@@ -123,6 +129,15 @@ const api = express.Router();
 
 api.get("/ocr-info", (_req, res) => {
   res.json(getOcrInfo());
+});
+
+api.get("/profile", async (_req, res) => {
+  if (!hasSavedToken()) return res.status(401).json({ error: "Not authenticated" });
+  try {
+    res.json(await getProfile());
+  } catch {
+    res.status(502).json({ error: "Could not load Google account details." });
+  }
 });
 
 api.post("/uploads", (req, res, next) => {
@@ -240,7 +255,8 @@ app.get(["/upload", "/receipt/upload"], (req, res) => {
   const basePath = requestBasePath(req);
   if (!hasSavedToken()) return res.redirect(`${basePath}/auth`);
   const html = fs.readFileSync(path.join(__dirname, "public", "upload.html"), "utf8")
-    .replace("/*BASE_PATH*/", JSON.stringify(basePath));
+    .replace('/*BASE_PATH*/ ""', JSON.stringify(basePath))
+    .replace("/*I18N_SCRIPT*/", `${basePath.replace(/\/+$/, "")}/i18n.js`);
   res.type("html").send(html);
 });
 
@@ -256,8 +272,9 @@ app.get(["/", "/receipt", "/receipt/"], (req, res) => {
   const shouldAutoScan = req.query.afterAuth === "1";
   const html = fs
     .readFileSync(path.join(__dirname, "public", "index.html"), "utf8")
-    .replace("/*BASE_PATH*/", JSON.stringify(injectedBase))
-    .replace("/*AUTO_SCAN*/", String(shouldAutoScan));
+    .replace('/*BASE_PATH*/ ""', JSON.stringify(injectedBase))
+    .replace("/*I18N_SCRIPT*/", `${injectedBase.replace(/\/+$/, "")}/i18n.js`)
+    .replace("/*AUTO_SCAN*/ false", String(shouldAutoScan));
   res.type("html").send(html);
 });
 
