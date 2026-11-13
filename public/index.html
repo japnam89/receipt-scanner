@@ -232,7 +232,7 @@
       const amount = Number(receipt.total);
       if (!Number.isFinite(amount)) return "";
       const storedCurrency = String(receipt.currency || "USD").trim().toUpperCase();
-      const sourceCurrency = storedCurrency === "$" || storedCurrency === "US$" ? "USD" : storedCurrency === "CA$" ? "CAD" : storedCurrency;
+      const sourceCurrency = storedCurrency === "$" || storedCurrency === "CA$" ? "CAD" : storedCurrency === "US$" ? "USD" : storedCurrency;
       if (sourceCurrency === displayCurrency) return formatCurrency(amount, displayCurrency);
       if (!exchangeRates || !Number.isFinite(exchangeRates[sourceCurrency]) || !Number.isFinite(exchangeRates[displayCurrency])) {
         return formatCurrency(amount, sourceCurrency);

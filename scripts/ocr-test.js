@@ -1,10 +1,15 @@
 const assert = require("assert");
-const { firstMoney, firstDate, guessMerchant, detectDocumentType } = require("../src/ocr");
+const { firstMoney, firstAmazeDealsPaidTotal, firstDate, guessMerchant, detectDocumentType } = require("../src/ocr");
 
 assert.strictEqual(firstMoney("AMOUNT DUE 42.50 USD"), 42.5);
 assert.strictEqual(firstMoney("TOTAL: $1,245.55"), 1245.55);
 assert.strictEqual(firstMoney("Subtotal\n$10.00\nTax\n$2.00\nTotal\n$12.00"), 12);
 assert.strictEqual(firstMoney("Grand Total\n$42.50"), 42.5);
+assert.strictEqual(firstMoney("Paid in full · $434.43\nInvoice Total · $428.01\nCredit card fee · $6.42"), 428.01);
+assert.strictEqual(firstMoney("264.50\n42.32\nTotal Extended Price:\n16% Buyer's Premium:\nHandling: 12.00\n8.00 Total Quantity:\nThank you\n41.45 Tax1 HST:\n$360.27\n$0.00\nInvoice Total:\nRemaining Invoice Balance:"), 360.27);
+assert.strictEqual(firstMoney("580.00\n92.80\nTotal Extended Price:\n16% Buyer's Premium:\nHandling: 4.50\n3.00 Total Quantity:\n88.05 Tax1 HST:\n$765.35\n$0.00\nInvoice Total:\nRemaining Invoice Balance:"), 765.35);
+assert.strictEqual(firstAmazeDealsPaidTotal("Paid in full · $434.43\nAUCTION\nInvoice Total · $428.01", "AmazeDeals-Receipt.pdf"), 434.43);
+assert.strictEqual(firstAmazeDealsPaidTotal("Paid in full · $434.43\nInvoice Total · $428.01", "Other-Invoice.pdf"), null);
 assert.strictEqual(firstMoney("Reference 60472236\n2200 2450\n1 0 6"), null);
 assert.strictEqual(firstDate("20 Sep 2026"), "20 Sep 2026");
 assert.strictEqual(firstDate("Sep 20, 2026"), "Sep 20, 2026");
@@ -15,6 +20,7 @@ assert.strictEqual(guessMerchant("Shipping Address Seagate Return\nLocation\nJAP
 assert.strictEqual(guessMerchant("Account statement\n407etr.com\nTotal amount due", "statement.pdf"), "407 ETR");
 assert.strictEqual(guessMerchant("", "1jpFC-9x6eTCiipW_nwGlpq2uK2Let3QD.pdf"), "Unknown merchant");
 assert.strictEqual(detectDocumentType("Auction Sale - returned items\nInvoice # 123", "invoice.pdf"), "Auction");
+assert.strictEqual(detectDocumentType("Amaze Deal Corp.\nPAID RECEIPT\nBID CARD #103\nAUCTION\n02/NOVEMBER AUCTION\nLOT # ITEM\nInvoice Total $428.01", "AmazeDeals-Receipt-AZ.pdf"), "Auction");
 assert.strictEqual(detectDocumentType("Bill date: Oct 18\nBilling period: September", "statement.pdf"), "Bill");
 assert.strictEqual(detectDocumentType("Payment confirmation\nPaid in full", "receipt.pdf"), "Payment");
 assert.strictEqual(detectDocumentType("Total $12.00", "invoice-1.pdf"), "Invoice");

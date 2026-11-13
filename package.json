@@ -1,6 +1,6 @@
 {
   "name": "receipt-scanner",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "REST CRUD receipt scanner that pulls receipts from Google Drive, OCRs them, and stores structured data.",
   "main": "server.js",
   "scripts": {

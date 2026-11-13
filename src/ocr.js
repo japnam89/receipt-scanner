@@ -40,7 +40,7 @@ function firstMoney(text) {
     let values = parseValues(line);
     if (!values.length && index + 1 < lines.length) values = parseValues(lines[index + 1]);
     if (strongTotal.test(line) && values.length) labeledTotals.push(values[values.length - 1]);
-    else if (plainTotal.test(line) && !/\b(?:sub|line|tax)\s*total\b/i.test(line) && values.length) {
+    else if (plainTotal.test(line) && !/\b(?:sub|line|tax)\s*total\b|\btotal\s+(?:quantity|extended\s+price)\b/i.test(line) && values.length) {
       plainTotals.push(values[values.length - 1]);
     }
   }
@@ -49,6 +49,14 @@ function firstMoney(text) {
   if (plainTotals.length) return plainTotals[plainTotals.length - 1];
   if (markedAmounts.length) return Math.max(...markedAmounts);
   return decimalAmounts.length ? Math.max(...decimalAmounts) : null;
+}
+
+function firstAmazeDealsPaidTotal(text, filename = "") {
+  const source = String(text);
+  if (!/\bamaze\s*deals?\b/i.test(`${filename}\n${source}`) || !/\bauction\b/i.test(source)) return null;
+
+  const paidLines = source.split(/\r?\n/).filter((line) => /\bpaid\s+in\s+full\b/i.test(line));
+  return paidLines.length ? firstMoney(paidLines[paidLines.length - 1]) : null;
 }
 
 function firstDate(text) {
@@ -137,9 +145,13 @@ function guessMerchant(text, filename) {
 
 function detectDocumentType(text, filename = "") {
   const title = path.basename(filename || "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase().replace(/[._-]+/g, " ");
-  const opening = String(text).split(/\r?\n/).slice(0, 8).join(" ").toLowerCase();
+  const fullText = String(text).toLowerCase();
+  const opening = fullText.split(/\r?\n/).slice(0, 8).join(" ");
   const content = `${title}\n${opening}`;
-  if (/\bauction sale\b|\bwinning bidders?\b|\bbidcard\b|\bbid card\b|\bauction\b.*\b(?:invoice|receipt|sale)\b/.test(content)) return "Auction";
+  if (
+    /\bauction sale\b|\bwinning bidders?\b|\bbidcard\b|\bbid card\b|\bauction\b.*\b(?:invoice|receipt|sale)\b/.test(content) ||
+    (/\bauction\b/.test(fullText) && /\bbid\s*card\b|\blot\s*#?\s*item\b|\bwinning bidders?\b/.test(fullText))
+  ) return "Auction";
   if (/order\s*confirmation/.test(title) || /\border confirmation\b/.test(opening)) return "Order";
   if (/\bbill\b|\bbilling period\b/.test(title) || /\b(?:bill date|billing period|monthly bill|utility bill|bill statement)\b/.test(opening)) return "Bill";
   if (/\binvoice\b/.test(title) || /\binvoice\b/.test(opening)) return "Invoice";
@@ -184,9 +196,9 @@ async function ocrBuffer(buf, mimeType) {
 async function extract(buf, mimeType, filename) {
   const text = await ocrBuffer(buf, mimeType);
   const normalized = text.replace(/\r/g, "\n").replace(/[\t ]+/g, " ").replace(/\n{2,}/g, "\n").trim();
-  const total = firstMoney(normalized) ?? firstMoney(text);
-  const currencyMatch = normalized.match(/₹|\$|€|£|USD|EUR|GBP|CHF|JPY|CAD|AUD|INR/i);
-  const currency = currencyMatch?.[0] || "$";
+  const total = firstAmazeDealsPaidTotal(normalized, filename) ?? firstMoney(normalized) ?? firstMoney(text);
+  const currencyMatch = normalized.match(/US\$|CA\$|USD|EUR|GBP|CHF|JPY|CAD|AUD|INR|₹|\$|€|£/i);
+  const currency = currencyMatch?.[0] || "CAD";
   const receipt_date = firstDate(normalized) ?? firstDate(text);
   return {
     raw_text: text.slice(0, 20000),
@@ -206,4 +218,4 @@ function getOcrInfo() {
   };
 }
 
-module.exports = { extract, firstMoney, firstDate, guessMerchant, detectDocumentType, getOcrInfo };
+module.exports = { extract, firstMoney, firstAmazeDealsPaidTotal, firstDate, guessMerchant, detectDocumentType, getOcrInfo };
