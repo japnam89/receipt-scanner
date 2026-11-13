@@ -3,23 +3,25 @@
 A small **Node.js REST API** that scans your **Google Drive** for receipts,
 runs **OCR** (Tesseract.js locally, no API key), and stores structured data
 (merchant, total, date) you can **Create / Read / Update / Delete** via REST.
+Receipt data is limited to the Google account configured by `GOOGLE_ALLOWED_EMAIL`.
 
 ## Quick start
 
 ```bash
 cd receipt-scanner
 npm install
-cp .env.example .env        # fill GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET
+cp .env.example .env        # fill Google OAuth credentials + GOOGLE_ALLOWED_EMAIL
 npm start                   # http://localhost:4000
 ```
 
-### Connect Google Drive (one time)
+### Sign in with the authorized Google account
 1. Create an **OAuth 2.0 Client ID** at
    https://console.cloud.google.com/apis/credentials
    (add `http://localhost:4000/oauth2callback` as an authorized redirect URI,
    and enable the **Google Drive API**).
-2. Put the client id/secret in `.env`.
-3. Open http://localhost:4000/auth, authorize, and the token is saved.
+2. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_ALLOWED_EMAIL` in `.env`.
+3. Open http://localhost:4000/auth and sign in with that Google account.
+   Receipt pages and APIs are available only to that signed-in account.
 
 ### Deploy behind japnam.tech/receipt (Traefik)
 The repo includes `docker-compose.yml` that mounts this app at
@@ -33,7 +35,7 @@ manual `docker compose` path.
 ```bash
 cd receipt-scanner
 cp .env.example .env
-# fill GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET, and set:
+# fill GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and GOOGLE_ALLOWED_EMAIL; set:
 #   OAUTH_REDIRECT_URI=https://japnam.tech/receipt/oauth2callback
 #   BASE_PATH=/receipt
 docker compose up -d --build
@@ -42,7 +44,8 @@ docker compose up -d --build
 Then:
 1. Open **https://japnam.tech/receipt/auth** and authorize Google Drive.
    (Add `https://japnam.tech/receipt/oauth2callback` as an authorized redirect
-   URI in the Google Cloud OAuth client.)
+   URI in the Google Cloud OAuth client. Only the account matching
+   `GOOGLE_ALLOWED_EMAIL` is authorized.)
 2. `POST https://japnam.tech/receipt/api/scan` to pull + OCR receipts.
 3. Dashboard + CRUD at **https://japnam.tech/receipt**.
 
@@ -51,6 +54,7 @@ Then:
 
 ## How it works
 - `src/drive.js` — Google OAuth2 + Drive list/download (read-only scope).
+- `src/web-auth.js` — allowlisted Google account sessions for receipt pages and APIs.
 - `src/ocr.js` — Tesseract.js for images, pdf-parse for PDFs; heuristic
   extraction of merchant/total/date.
 - `src/scan.js` — orchestrates list → download → OCR → upsert.
@@ -62,7 +66,7 @@ Then:
   `receipt|invoice|bill|expense`. Set `GOOGLE_DRIVE_FOLDER_ID` to scope to one folder.
 - OCR is heuristic; for production accuracy swap `src/ocr.js` for Google Vision
   or an LLM with vision.
-- CRUD works even before Drive is connected (you can POST receipts manually).
+- The authorized account can use local CRUD before running a Drive scan.
 
 ## Troubleshooting: `https://japnam.tech/receipt` returns the portfolio's 404
 This app is a **separate container** from the portfolio — deploying/redeploying

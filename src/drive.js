@@ -1,6 +1,6 @@
 // Google Drive client: OAuth2 auth + listing/downloading receipt-like files.
-// Credentials come from env (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET) and the
-// token is persisted to token.json after `npm run auth`.
+// Credentials come from env (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET), and the
+// authorized account's token is persisted to token.json after web sign-in.
 const fs = require("fs");
 const path = require("path");
 const { google } = require("googleapis");
@@ -22,35 +22,43 @@ function loadCreds() {
   return { client_id: id, client_secret: secret, redirect_uris: [redirectUri()] };
 }
 
-function getClient() {
+function createClient() {
   const creds = loadCreds();
   if (!creds) return null;
-  const client = new google.auth.OAuth2(creds.client_id, creds.client_secret, creds.redirect_uris[0]);
+  return new google.auth.OAuth2(creds.client_id, creds.client_secret, creds.redirect_uris[0]);
+}
+
+function getClient() {
+  const client = createClient();
+  if (!client) return null;
   if (fs.existsSync(TOKEN_PATH)) {
     client.setCredentials(JSON.parse(fs.readFileSync(TOKEN_PATH, "utf8")));
   }
   return client;
 }
 
-function authUrl() {
-  const client = getClient();
+function authUrl(state) {
+  const client = createClient();
   if (!client) throw new Error("Google credentials not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env");
-  return client.generateAuthUrl({ access_type: "offline", prompt: "consent", scope: SCOPES });
+  if (!state) throw new Error("OAuth state is required. Start sign-in from the app's /auth page.");
+  return client.generateAuthUrl({ access_type: "offline", prompt: "consent", scope: SCOPES, state });
 }
 
 async function exchangeCode(code) {
-  const client = getClient();
+  const client = createClient();
+  if (!client) throw new Error("Google credentials not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env");
   const { tokens } = await client.getToken(code);
   client.setCredentials(tokens);
-  fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
-  return tokens;
+  const profile = await getProfileForClient(client);
+  return { tokens, profile };
 }
 
-async function getProfile() {
-  const client = getClient();
-  if (!client || !client.credentials?.access_token) {
-    throw new Error("Not authenticated. Run `npm run auth` first.");
-  }
+function saveTokens(tokens) {
+  fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2), { mode: 0o600 });
+  fs.chmodSync(TOKEN_PATH, 0o600);
+}
+
+async function getProfileForClient(client) {
   const drive = google.drive({ version: "v3", auth: client });
   const response = await drive.about.get({ fields: "user(displayName,emailAddress)" });
   return {
@@ -59,13 +67,21 @@ async function getProfile() {
   };
 }
 
+async function getProfile() {
+  const client = getClient();
+  if (!client || !client.credentials?.access_token) {
+    throw new Error("Google Drive is not connected. Sign in with the authorized Google account.");
+  }
+  return getProfileForClient(client);
+}
+
 // List files that look like receipts: images / PDFs whose name mentions
 // receipt, invoice, bill, or expense (case-insensitive). Optionally scoped to
 // a folder via GOOGLE_DRIVE_FOLDER_ID.
 async function listReceiptFiles() {
   const client = getClient();
   if (!client || !client.credentials?.access_token) {
-    throw new Error("Not authenticated. Run `npm run auth` first.");
+    throw new Error("Not authenticated. Sign in with the authorized Google account first.");
   }
   const drive = google.drive({ version: "v3", auth: client });
   const folder = process.env.GOOGLE_DRIVE_FOLDER_ID;
@@ -92,4 +108,4 @@ async function downloadFile(fileId) {
   return Buffer.from(res.data);
 }
 
-module.exports = { loadCreds, getClient, authUrl, exchangeCode, getProfile, listReceiptFiles, downloadFile, TOKEN_PATH, redirectUri };
+module.exports = { loadCreds, getClient, authUrl, exchangeCode, saveTokens, getProfile, listReceiptFiles, downloadFile, TOKEN_PATH, redirectUri };

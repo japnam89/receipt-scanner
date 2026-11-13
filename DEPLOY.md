@@ -21,10 +21,15 @@ Two ways to deploy:
   need it) **or** from whatever host runs the workflow.
 - The app directory `/opt/data/receipt-scanner` containing a `.env` file
   (gitignored — never committed).
+- `GOOGLE_ALLOWED_EMAIL` set to the one Google account permitted to access receipts.
+- Back up the SQLite database before deployment. The current Compose setup does
+  not mount the database to persistent host storage, so container recreation can
+  discard receipt data.
 
-> The `.env` carries `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`. Because it is
-> gitignored, **you create it once on the VPS**; neither CI nor the repo ships it.
-> A missing `.env` makes the deploy fail fast with a clear error.
+> The `.env` carries `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
+> `GOOGLE_ALLOWED_EMAIL`. Because it is gitignored, **you create it once on the
+> VPS**; neither CI nor the repo ships it. A missing `.env` makes the deploy fail
+> fast with a clear error.
 
 ---
 
@@ -62,7 +67,7 @@ cd /opt/data
 git clone https://github.com/japnam89/receipt-scanner.git receipt-scanner
 cd receipt-scanner
 cp .env.example .env
-# edit .env: fill GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, and set
+# edit .env: fill GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_ALLOWED_EMAIL, and set
 #   OAUTH_REDIRECT_URI=https://japnam.tech/receipt/oauth2callback
 #   BASE_PATH=/receipt
 ```

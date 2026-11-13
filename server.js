@@ -5,11 +5,23 @@ const path = require("path");
 const fs = require("fs");
 const multer = require("multer");
 const { stmt } = require("./src/db");
-const { authUrl, exchangeCode, getProfile } = require("./src/drive");
+const { authUrl, exchangeCode, saveTokens, getProfile } = require("./src/drive");
 const { scan } = require("./src/scan");
 const { extract, detectDocumentType, getOcrInfo } = require("./src/ocr");
+const {
+  SESSION_COOKIE_NAME,
+  OAUTH_STATE_COOKIE_NAME,
+  SESSION_MAX_AGE_SECONDS,
+  OAUTH_STATE_MAX_AGE_SECONDS,
+  normalizeEmail,
+  createSessionToken,
+  hasValidSession,
+  createOAuthState,
+  hasValidOAuthState,
+} = require("./src/web-auth");
 
 const app = express();
+app.set("trust proxy", 1);
 app.use(express.json());
 
 // Base path this app is mounted under when behind a reverse proxy.
@@ -37,6 +49,36 @@ function noCache(res) {
   res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
   res.set("Pragma", "no-cache");
   res.set("Expires", "0");
+}
+
+function allowedGoogleEmail() {
+  return normalizeEmail(process.env.GOOGLE_ALLOWED_EMAIL);
+}
+
+function isAuthenticated(req) {
+  return hasValidSession(
+    req,
+    allowedGoogleEmail(),
+    process.env.GOOGLE_CLIENT_SECRET,
+  );
+}
+
+function cookieOptions(req, maxAge) {
+  return {
+    httpOnly: true,
+    secure: req.secure,
+    sameSite: "lax",
+    path: BASE_PATH || "/",
+    ...(maxAge === undefined ? {} : { maxAge }),
+  };
+}
+
+function requireGoogleAuth(req, res, next) {
+  noCache(res);
+  if (!isAuthenticated(req)) {
+    return res.status(401).json({ error: "Sign in with the authorized Google account." });
+  }
+  next();
 }
 
 function requestBasePath(req) {
@@ -71,12 +113,19 @@ app.get(i18nRoutePaths, (_req, res) => {
   res.type("application/javascript").sendFile(path.join(__dirname, "public", "i18n.js"));
 });
 
-// ---------- OAuth (one-time setup) ----------
+// ---------- Google sign-in ----------
 app.get(["/auth", "/receipt/auth"], (req, res) => {
   try {
     noCache(res);
     const basePath = requestBasePath(req);
-    if (hasSavedToken()) return res.redirect(`${basePath}/`);
+    if (!allowedGoogleEmail()) {
+      return res.status(503).type("html").send(authErrorPage(
+        "Sign-in not configured",
+        "The authorized Google account has not been configured on this server.",
+        basePath,
+      ));
+    }
+    if (isAuthenticated(req)) return res.redirect(`${basePath}/`);
     const startPath = `${basePath}/auth/start`;
     const i18nPath = `${basePath.replace(/\/+$/, "")}/i18n.js`;
     res.type("html").send(`<!doctype html>
@@ -93,7 +142,22 @@ app.get(["/auth", "/receipt/auth"], (req, res) => {
 app.get(["/auth/start", "/receipt/auth/start"], (req, res) => {
   try {
     noCache(res);
-    res.redirect(authUrl());
+    const basePath = requestBasePath(req);
+    if (!allowedGoogleEmail()) {
+      return res.status(503).type("html").send(authErrorPage(
+        "Sign-in not configured",
+        "The authorized Google account has not been configured on this server.",
+        basePath,
+      ));
+    }
+    if (isAuthenticated(req)) return res.redirect(`${basePath}/`);
+
+    const state = createOAuthState(process.env.GOOGLE_CLIENT_SECRET);
+    res.cookie(OAUTH_STATE_COOKIE_NAME, state, cookieOptions(
+      req,
+      OAUTH_STATE_MAX_AGE_SECONDS * 1000,
+    ));
+    res.redirect(authUrl(state));
   } catch (e) {
     noCache(res);
     res.status(500).type("html").send(authErrorPage("Sign-in unavailable", e.message, requestBasePath(req)));
@@ -102,16 +166,61 @@ app.get(["/auth/start", "/receipt/auth/start"], (req, res) => {
 
 app.post(["/auth/logout", "/receipt/auth/logout"], (req, res) => {
   noCache(res);
-  const tokenPath = path.join(__dirname, "token.json");
-  if (fs.existsSync(tokenPath)) fs.unlinkSync(tokenPath);
+  const options = cookieOptions(req);
+  res.clearCookie(SESSION_COOKIE_NAME, options);
+  res.clearCookie(OAUTH_STATE_COOKIE_NAME, options);
   res.status(204).end();
 });
 
 app.get(["/oauth2callback", "/receipt/oauth2callback"], async (req, res) => {
   try {
     noCache(res);
-    await exchangeCode(req.query.code);
     const basePath = requestBasePath(req);
+    const state = typeof req.query.state === "string" ? req.query.state : "";
+    const stateIsValid = hasValidOAuthState(
+      req,
+      state,
+      process.env.GOOGLE_CLIENT_SECRET,
+    );
+    res.clearCookie(OAUTH_STATE_COOKIE_NAME, cookieOptions(req));
+
+    if (!stateIsValid) {
+      return res.status(400).type("html").send(authErrorPage(
+        "Sign-in could not be verified",
+        "Please start again from the sign-in page.",
+        basePath,
+      ));
+    }
+    if (!allowedGoogleEmail()) {
+      return res.status(503).type("html").send(authErrorPage(
+        "Sign-in not configured",
+        "The authorized Google account has not been configured on this server.",
+        basePath,
+      ));
+    }
+    if (req.query.error || typeof req.query.code !== "string") {
+      return res.status(400).type("html").send(authErrorPage(
+        "Google sign-in was not completed",
+        "Please try signing in again.",
+        basePath,
+      ));
+    }
+
+    const { tokens, profile } = await exchangeCode(req.query.code);
+    if (normalizeEmail(profile.email) !== allowedGoogleEmail()) {
+      return res.status(403).type("html").send(authErrorPage(
+        "Google account not authorized",
+        "This receipt scanner is only available to its configured Google account.",
+        basePath,
+      ));
+    }
+
+    saveTokens(tokens);
+    res.cookie(
+      SESSION_COOKIE_NAME,
+      createSessionToken(profile.email, process.env.GOOGLE_CLIENT_SECRET),
+      cookieOptions(req, SESSION_MAX_AGE_SECONDS * 1000),
+    );
     const redirectTarget = `${basePath}/?afterAuth=1`;
     return res.type("html").send(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Cache-Control" content="no-store"><title>Authenticated | Receipt Scanner</title>
@@ -126,6 +235,7 @@ app.get(["/oauth2callback", "/receipt/oauth2callback"], async (req, res) => {
 
 // ---------- REST CRUD ----------
 const api = express.Router();
+api.use(requireGoogleAuth);
 
 api.get("/ocr-info", (_req, res) => {
   res.json(getOcrInfo());
@@ -141,7 +251,6 @@ api.get("/profile", async (_req, res) => {
 });
 
 api.post("/uploads", (req, res, next) => {
-  if (!hasSavedToken()) return res.status(401).json({ error: "Sign in with Google before uploading receipts." });
   uploadPdfFiles(req, res, (error) => {
     if (!error) return next();
     const tooManyFiles = error.code === "LIMIT_FILE_COUNT" || error.code === "LIMIT_UNEXPECTED_FILE";
@@ -253,7 +362,7 @@ app.use("/api", api);
 app.get(["/upload", "/receipt/upload"], (req, res) => {
   noCache(res);
   const basePath = requestBasePath(req);
-  if (!hasSavedToken()) return res.redirect(`${basePath}/auth`);
+  if (!isAuthenticated(req)) return res.redirect(`${basePath}/auth`);
   const html = fs.readFileSync(path.join(__dirname, "public", "upload.html"), "utf8")
     .replace('/*BASE_PATH*/ ""', JSON.stringify(basePath))
     .replace("/*I18N_SCRIPT*/", `${basePath.replace(/\/+$/, "")}/i18n.js`);
@@ -266,7 +375,7 @@ app.get(["/", "/receipt", "/receipt/"], (req, res) => {
   noCache(res);
 
   const basePath = requestBasePath(req);
-  if (!hasSavedToken()) return res.redirect(`${basePath}/auth`);
+  if (!isAuthenticated(req)) return res.redirect(`${basePath}/auth`);
 
   const injectedBase = basePath;
   const shouldAutoScan = req.query.afterAuth === "1";
