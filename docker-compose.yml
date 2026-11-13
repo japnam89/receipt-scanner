@@ -1,12 +1,7 @@
 # receipt-scanner Docker Compose with Traefik labels
 #
-# Traefik runs with network_mode: host + --providers.docker.exposedbydefault=false.
-# A host-networked container has no Docker bridge IP, so Traefik's auto-discovery
-# can't determine the backend address. We specify it explicitly with the
-# loadbalancer.servers[0].url label.
-#
-# NOTE: Traefik (host network) CANNOT join bridge networks, so we keep
-# network_mode: host and use the explicit servers[0].url label.
+# Traefik runs with host networking; the Docker provider discovers this
+# service on Compose's bridge network.
 version: "3.8"
 
 services:
@@ -14,7 +9,8 @@ services:
     build: .
     container_name: receipt-scanner
     restart: unless-stopped
-    network_mode: host
+    ports:
+      - "127.0.0.1:4000:4000"
     env_file: .env
     environment:
       - OAUTH_REDIRECT_URI=https://japnam.tech/receipt/oauth2callback
@@ -33,4 +29,4 @@ services:
       - "traefik.http.routers.receipt.tls.certresolver=letsencrypt"
       - "traefik.http.middlewares.receipt-stripprefix.stripprefix.prefixes=/receipt"
       - "traefik.http.routers.receipt.middlewares=receipt-stripprefix"
-      - "traefik.http.services.receipt.loadbalancer.servers[0].url=http://127.0.0.1:4000"
+      - "traefik.http.services.receipt.loadbalancer.server.port=4000"
