@@ -1,11 +1,13 @@
-// SQLite store for receipts (better-sqlite3 — synchronous, zero-config file DB).
-const path = require("path");
+// SQLite store for receipts (better-sqlite3 — file-based database).
 const Database = require("better-sqlite3");
+const path = require("path");
 const { firstMoney } = require("./ocr");
 
-const db = new Database(process.env.DB_PATH || path.join(__dirname, "..", "receipts.db"));
+const dbPath = process.env.DB_PATH || path.join(__dirname, "..", "receipts.db");
+const db = new Database(dbPath);
 db.pragma("journal_mode = WAL");
 
+// Initialize schema on startup
 db.exec(`
   CREATE TABLE IF NOT EXISTS receipts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,7 +32,8 @@ db.exec(`
   );
 `);
 
-const repairLegacyEncoreTotals = db.transaction(() => {
+// Migration: Repair legacy Encore invoice totals
+const repairLegacyEncoreTotals = async () => {
   const migration = "repair-encore-invoice-totals-v1";
   if (db.prepare("SELECT 1 FROM receipt_data_migrations WHERE name = ?").get(migration)) return;
 
@@ -41,6 +44,7 @@ const repairLegacyEncoreTotals = db.transaction(() => {
       AND raw_text LIKE '%Total Quantity:%'
       AND raw_text LIKE '%Invoice Total:%'
   `).all();
+
   const updateTotal = db.prepare("UPDATE receipts SET total = ?, updated_at = datetime('now') WHERE id = ?");
 
   for (const row of rows) {
@@ -49,11 +53,14 @@ const repairLegacyEncoreTotals = db.transaction(() => {
     if (quantity === null || Number(row.total) !== quantity) continue;
 
     const correctedTotal = firstMoney(row.raw_text);
-    if (correctedTotal !== null && correctedTotal !== row.total) updateTotal.run(correctedTotal, row.id);
+    if (correctedTotal !== null && correctedTotal !== row.total) {
+      updateTotal.run(correctedTotal, row.id);
+    }
   }
 
   db.prepare("INSERT INTO receipt_data_migrations (name) VALUES (?)").run(migration);
-});
+};
+
 repairLegacyEncoreTotals();
 
 const stmt = {

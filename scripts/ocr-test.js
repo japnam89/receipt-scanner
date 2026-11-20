@@ -1,5 +1,5 @@
 const assert = require("assert");
-const { firstMoney, firstAmazeDealsPaidTotal, firstDate, guessMerchant, detectDocumentType } = require("../src/ocr");
+const { firstMoney, firstAmazeDealsPaidTotal, extractWithFoundryLocal, firstDate, guessMerchant, detectDocumentType } = require("../src/ocr");
 
 assert.strictEqual(firstMoney("AMOUNT DUE 42.50 USD"), 42.5);
 assert.strictEqual(firstMoney("TOTAL: $1,245.55"), 1245.55);
@@ -27,4 +27,31 @@ assert.strictEqual(detectDocumentType("Total $12.00", "invoice-1.pdf"), "Invoice
 assert.strictEqual(detectDocumentType("RMA number and shipping address", "OrderConfirmation.pdf"), "Order");
 assert.strictEqual(detectDocumentType("Apple Markville Shopping Centre", "EmailReceipt_20260213.pdf"), "Receipt");
 
-console.log("ocr-test: ok");
+async function testFoundryLocal() {
+  assert.strictEqual(await extractWithFoundryLocal("Total $12.00", "receipt.pdf", { endpoint: "", model: "local-model" }), null);
+  const foundryRequest = {};
+  const foundryResult = await extractWithFoundryLocal("Invoice Total $428.01", "invoice.pdf", {
+    endpoint: "http://127.0.0.1:5273/v1/",
+    model: "local-model",
+    fetchImpl: async (url, options) => {
+      foundryRequest.url = url;
+      foundryRequest.body = JSON.parse(options.body);
+      return {
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: '{"merchant":"Amaze Deals","total":428.01,"currency":"CAD","receipt_date":null}' } }] }),
+      };
+    },
+  });
+  assert.strictEqual(foundryRequest.url, "http://127.0.0.1:5273/v1/chat/completions");
+  assert.strictEqual(foundryRequest.body.model, "local-model");
+  assert.strictEqual(foundryResult.total, 428.01);
+  assert.strictEqual(foundryResult.currency, "CAD");
+  assert.strictEqual(foundryResult.merchant, "Amaze Deals");
+}
+
+testFoundryLocal()
+  .then(() => console.log("ocr-test: ok"))
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });

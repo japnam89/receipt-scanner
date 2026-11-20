@@ -26,7 +26,7 @@ npm start                   # http://localhost:4000
 ### Deploy behind japnam.tech/receipt (Traefik)
 The repo includes `docker-compose.yml` that mounts this app at
 **https://japnam.tech/receipt** via the existing Traefik (path stripping +
-letsencrypt TLS). It's a separate container from the portfolio/hibid stacks.
+letsencrypt TLS). It's a separate container from the portfolio stacks.
 
 See **[DEPLOY.md](./DEPLOY.md)** for the full deploy runbook — including the
 GitHub Actions automatic deploy (SSH into the VPS after a green CI run) and a
@@ -66,6 +66,12 @@ Then:
   `receipt|invoice|bill|expense`. Set `GOOGLE_DRIVE_FOLDER_ID` to scope to one folder.
 - OCR is heuristic; for production accuracy swap `src/ocr.js` for Google Vision
   or an LLM with vision.
+- To optionally use a local Foundry model for field extraction, set
+  `FOUNDRY_LOCAL_ENDPOINT` to its OpenAI-compatible `/v1` endpoint and
+  `FOUNDRY_LOCAL_MODEL` to an installed model name in `.env`. OCR remains local
+  (Tesseract.js/PDFParse); when both settings are present, extracted text is
+  sent to the configured endpoint. If the endpoint is unavailable or returns
+  unusable data, the app logs a warning and uses its local heuristics instead.
 - The authorized account can use local CRUD before running a Drive scan.
 
 ## Troubleshooting: `https://japnam.tech/receipt` returns the portfolio's 404

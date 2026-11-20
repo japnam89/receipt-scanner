@@ -1,6 +1,7 @@
 // Google Drive client: OAuth2 auth + listing/downloading receipt-like files.
-// Credentials come from env (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET), and the
+// Credentials come from environment variables (GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET), and the
 // authorized account's token is persisted to token.json after web sign-in.
+
 const fs = require("fs");
 const path = require("path");
 const { google } = require("googleapis");
@@ -9,10 +10,7 @@ const TOKEN_PATH = path.join(__dirname, "..", "token.json");
 const SCOPES = ["https://www.googleapis.com/auth/drive.readonly"];
 
 function redirectUri() {
-  return (
-    process.env.OAUTH_REDIRECT_URI ||
-    `http://localhost:${process.env.PORT || 4000}/oauth2callback`
-  );
+  return process.env.OAUTH_REDIRECT_URI || `http://localhost:${process.env.PORT || 4000}/oauth2callback`;
 }
 
 function loadCreds() {
@@ -53,7 +51,7 @@ async function exchangeCode(code) {
   return { tokens, profile };
 }
 
-function saveTokens(tokens) {
+async function saveTokens(tokens) {
   fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2), { mode: 0o600 });
   fs.chmodSync(TOKEN_PATH, 0o600);
 }
@@ -85,12 +83,11 @@ async function listReceiptFiles() {
   }
   const drive = google.drive({ version: "v3", auth: client });
   const folder = process.env.GOOGLE_DRIVE_FOLDER_ID;
-  const q = [
-    "trashed = false",
-    "(mimeType = 'application/pdf' or mimeType contains 'image/')",
-    "(name contains 'receipt' or name contains 'invoice' or name contains 'bill' or name contains 'expense' or name contains 'order' or name contains 'statement' or name contains 'payment' or name contains 'purchase' or name contains 'tax' or name contains 'charge' or name contains 'statement')",
-    folder ? `'${folder}' in parents` : null,
-  ].filter(Boolean).join(" and ");
+  
+  const keywords = ["receipt", "invoice", "bill", "expense", "order", "statement", "payment", "purchase", "tax", "charge"];
+  const searchKeywords = keywords.map(k => `"${k}"`).join(" OR name contains '");
+  
+  const q = `trashed = false AND (mimeType = 'application/pdf' OR mimeType contains 'image/') AND (${searchKeywords}) ${folder ? `AND '${folder}' in parents` : ''}`;
 
   const res = await drive.files.list({
     q,
@@ -98,7 +95,8 @@ async function listReceiptFiles() {
     fields: "files(id, name, mimeType, webViewLink, thumbnailLink, createdTime)",
     orderBy: "createdTime desc",
   });
-  return res.data.files || [];
+  
+  return res.data?.files || [];
 }
 
 async function downloadFile(fileId) {

@@ -1,14 +1,21 @@
+// Web authentication module for session and OAuth state management.
 const crypto = require("node:crypto");
 
 const SESSION_COOKIE_NAME = "receipt_auth";
 const OAUTH_STATE_COOKIE_NAME = "receipt_oauth_state";
-const SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
-const OAUTH_STATE_MAX_AGE_SECONDS = 10 * 60;
+const SESSION_MAX_AGE_SECONDS = 7 * 24 * 60 * 60; // 7 days
+const OAUTH_STATE_MAX_AGE_SECONDS = 10 * 60; // 10 minutes
 
 function normalizeEmail(email) {
   return typeof email === "string" ? email.trim().toLowerCase() : "";
 }
 
+/**
+ * Read cookie value from request headers.
+ * @param {HttpHeaders} req - Express request object
+ * @param {string} name - Cookie name to read
+ * @returns {string}
+ */
 function readCookie(req, name) {
   const header = req.headers.cookie;
   if (typeof header !== "string") return "";
@@ -28,6 +35,12 @@ function sign(value, secret) {
     .digest("base64url");
 }
 
+/**
+ * Compare two strings in a timing-safe manner to prevent timing attacks.
+ * @param {string} left 
+ * @param {string} right 
+ * @returns {boolean}
+ */
 function safeEqual(left, right) {
   if (typeof left !== "string" || typeof right !== "string") return false;
   const leftBuffer = Buffer.from(left);
@@ -76,6 +89,14 @@ function isValidSessionToken(token, allowedEmail, secret, now = Date.now()) {
   );
 }
 
+/**
+ * Validate a session token with allowed email and secret.
+ * @param {HttpHeaders} req - Express request object
+ * @param {string} allowedEmail 
+ * @param {string} secret 
+ * @param {number} now 
+ * @returns {boolean}
+ */
 function hasValidSession(req, allowedEmail, secret, now = Date.now()) {
   return isValidSessionToken(readCookie(req, SESSION_COOKIE_NAME), allowedEmail, secret, now);
 }
@@ -105,12 +126,15 @@ function hasValidOAuthState(req, queryState, secret, now = Date.now()) {
   return isValidOAuthState(readCookie(req, OAUTH_STATE_COOKIE_NAME), queryState, secret, now);
 }
 
-module.exports = {
-  SESSION_COOKIE_NAME,
-  OAUTH_STATE_COOKIE_NAME,
-  SESSION_MAX_AGE_SECONDS,
+module.exports = { 
+  SESSION_COOKIE_NAME, 
+  OAUTH_STATE_COOKIE_NAME, 
+  SESSION_MAX_AGE_SECONDS, 
   OAUTH_STATE_MAX_AGE_SECONDS,
   normalizeEmail,
+  readCookie,
+  sign,
+  safeEqual,
   createSessionToken,
   hasValidSession,
   createOAuthState,
