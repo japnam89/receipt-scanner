@@ -8,6 +8,7 @@ const { google } = require("googleapis");
 
 const TOKEN_PATH = path.join(__dirname, "..", "token.json");
 const SCOPES = ["https://www.googleapis.com/auth/drive.readonly"];
+const RECEIPT_KEYWORDS = ["receipt", "invoice", "bill", "expense", "order", "statement", "payment", "purchase", "tax", "charge"];
 
 function redirectUri() {
   return process.env.OAUTH_REDIRECT_URI || `http://localhost:${process.env.PORT || 4000}/oauth2callback`;
@@ -73,6 +74,24 @@ async function getProfile() {
   return getProfileForClient(client);
 }
 
+function buildReceiptQuery(folder = process.env.GOOGLE_DRIVE_FOLDER_ID) {
+  const nameQuery = RECEIPT_KEYWORDS
+    .map((keyword) => `name contains '${keyword}'`)
+    .join(" or ");
+  const clauses = [
+    "trashed = false",
+    "(mimeType = 'application/pdf' or mimeType contains 'image/')",
+    `(${nameQuery})`,
+  ];
+
+  if (folder) {
+    const escapedFolder = folder.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    clauses.push(`'${escapedFolder}' in parents`);
+  }
+
+  return clauses.join(" and ");
+}
+
 // List files that look like receipts: images / PDFs whose name mentions
 // receipt, invoice, bill, or expense (case-insensitive). Optionally scoped to
 // a folder via GOOGLE_DRIVE_FOLDER_ID.
@@ -82,15 +101,9 @@ async function listReceiptFiles() {
     throw new Error("Not authenticated. Sign in with the authorized Google account first.");
   }
   const drive = google.drive({ version: "v3", auth: client });
-  const folder = process.env.GOOGLE_DRIVE_FOLDER_ID;
-  
-  const keywords = ["receipt", "invoice", "bill", "expense", "order", "statement", "payment", "purchase", "tax", "charge"];
-  const searchKeywords = keywords.map(k => `"${k}"`).join(" OR name contains '");
-  
-  const q = `trashed = false AND (mimeType = 'application/pdf' OR mimeType contains 'image/') AND (${searchKeywords}) ${folder ? `AND '${folder}' in parents` : ''}`;
 
   const res = await drive.files.list({
-    q,
+    q: buildReceiptQuery(),
     pageSize: 100,
     fields: "files(id, name, mimeType, webViewLink, thumbnailLink, createdTime)",
     orderBy: "createdTime desc",
@@ -106,4 +119,4 @@ async function downloadFile(fileId) {
   return Buffer.from(res.data);
 }
 
-module.exports = { loadCreds, getClient, authUrl, exchangeCode, saveTokens, getProfile, listReceiptFiles, downloadFile, TOKEN_PATH, redirectUri };
+module.exports = { loadCreds, getClient, authUrl, exchangeCode, saveTokens, getProfile, buildReceiptQuery, listReceiptFiles, downloadFile, TOKEN_PATH, redirectUri };

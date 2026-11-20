@@ -12,6 +12,7 @@ const {
   createOAuthState,
   isValidOAuthState,
 } = require("../src/web-auth");
+const { buildReceiptQuery } = require("../src/drive");
 
 const PORT = process.env.SMOKE_PORT || 4123;
 let pass = 0, fail = 0;
@@ -85,6 +86,9 @@ const waitForServer = async (srv) => {
     check("OAuth state accepts the matching callback value", isValidOAuthState(state, state, TEST_SECRET));
     check("OAuth state rejects a mismatched callback value", !isValidOAuthState(state, `${state}x`, TEST_SECRET));
     check("OAuth state expires", !isValidOAuthState(state, state, TEST_SECRET, Date.now() + 11 * 60 * 1000));
+    const driveQuery = buildReceiptQuery("");
+    check("Drive query searches filenames with valid clauses", driveQuery.includes("name contains 'receipt'") && driveQuery.includes("name contains 'charge'") && !driveQuery.includes('"receipt"'));
+    check("Drive query scopes to a configured folder", buildReceiptQuery("folder-id").includes("'folder-id' in parents"));
 
     const home = await get("/");
     check("GET / redirects unauthenticated users", home.code === 302 && home.headers.location === "/auth", "code=" + home.code);
