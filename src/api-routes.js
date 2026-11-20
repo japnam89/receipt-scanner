@@ -5,8 +5,6 @@
 import { Router } from "express";
 import multer from "multer";
 import config from "./config.js";
-import db from "./db-routes.js";
-import ocr from "./ocr-routes.js";
 
 const router = Router();
 
@@ -19,9 +17,9 @@ export const apiRoutesPath = "/api";
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { 
-    files: config.uploads.maxFiles,
-    fileSize: config.uploads.maxSize,
-    parts: config.uploads.maxFiles,
+    files: config.uploads.maxFiles || 5,
+    fileSize: config.uploads.maxSize || 10 * 1024 * 1024,
+    parts: config.uploads.maxFiles || 5,
   },
 });
 

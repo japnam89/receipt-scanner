@@ -317,12 +317,4 @@ async function getProfile(client) {
   };
 }
 
-export { 
-  router, 
-  authRoutesPath,
-  validateSessionToken,
-  validateOAuthState,
-  exchangeCode,
-  saveTokens,
-  getProfile,
-};
+export { router };
